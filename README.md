@@ -10,13 +10,13 @@
 > [Zhejun Zhang](https://zhejz.github.io/), [Peter Karkus](https://karkus.tilda.ws/), [Maximilian Igl](https://maximilianigl.com/), [Wenhao Ding](https://wenhao.pub/), [Yuxiao Chen](https://research.nvidia.com/labs/avg/author/yuxiao-chen/), [Boris Ivanovic](https://www.borisivanovic.com/) and [Marco Pavone](https://web.stanford.edu/~pavone/index.html).<br/>
 > 
 > [Project Page](https://zhejz.github.io/catk)<br/>
-> [arXiv Paper](https://arxiv.org)
+> [arXiv Paper](https://arxiv.org/abs/2412.05334)
 
 ```bibtex
 @article{zhang2024closed,
   title = {Closed-Loop Supervised Fine-Tuning of Tokenized Traffic Models},
   author = {Zhang, Zhejun and Karkus, Peter and Igl, Maximilian and Ding, Wenhao and Chen, Yuxiao and Ivanovic, Boris and Pavone, Marco},
-  journal={arXiv preprint arXiv:2412.xxxxx},
+  journal={arXiv preprint arXiv:2412.05334},
   year = {2024},
 }
 ```
