@@ -16,7 +16,7 @@ model:
       num_k: 64 # for k most likely
       temp: 1.0
 
-ckpt_path: YOUR_MODEL.ckpt
+ckpt_path: logs/pre_bc-debug/runs/2024-12-18_19-17-33/checkpoints/last.ckpt #YOUR_MODEL.ckpt
 
 trainer:
   limit_train_batches: 1.0
@@ -25,9 +25,9 @@ trainer:
   check_val_every_n_epoch: 1
 
 data:
-  train_batch_size: 16
-  val_batch_size: 16
-  test_batch_size: 16
+  train_batch_size: 4 #16
+  val_batch_size: 4 #16
+  test_batch_size: 4 #16
   num_workers: 8
 
 action: validate

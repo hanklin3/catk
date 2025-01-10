@@ -1,6 +1,6 @@
 # torch and lightning for training
-torch==2.4.1 # BSD-style License: https://github.com/pytorch/pytorch/blob/main/LICENSE
-torchvision==0.19.1 # BSD 3-Clause License: https://github.com/pytorch/vision/blob/main/LICENSE
+# torch==2.4.1 # BSD-style License: https://github.com/pytorch/pytorch/blob/main/LICENSE
+# torchvision==0.19.1 # BSD 3-Clause License: https://github.com/pytorch/vision/blob/main/LICENSE
 lightning==2.4.0 # Apache License 2.0: https://github.com/Lightning-AI/pytorch-lightning/blob/master/LICENSE
 torchmetrics==1.4.1 # Apache License 2.0: https://github.com/Lightning-AI/torchmetrics/blob/master/LICENSE
 pandas==2.2.2 # BSD 3-Clause License: https://github.com/pandas-dev/pandas/blob/main/LICENSE
@@ -40,3 +40,4 @@ rich==13.8.0 # MIT License: https://github.com/Textualize/rich/blob/master/LICEN
 # Waymo Dataset
 # Waymo Dataset License Agreement for Non-Commercial Use: https://waymo.com/open/terms/
 
+# python -m pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121

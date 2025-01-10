@@ -86,7 +86,7 @@ class AttentionLayer(MessagePassing):
         if self.has_pos_emb and r is not None:
             k_j = k_j + self.to_k_r(r).view(-1, self.num_heads, self.head_dim)
             v_j = v_j + self.to_v_r(r).view(-1, self.num_heads, self.head_dim)
-        sim = (q_i * k_j).sum(dim=-1) * self.scale
+        sim = (q_i * k_j).sum(dim=-1) * self.scale # similarity between query (q_i) and key (k_j) using scaled dot-product attention
         attn = softmax(sim, index, ptr)
         self.attention_weight = attn.sum(-1).detach()
         attn = self.attn_drop(attn)

@@ -129,7 +129,7 @@ class TokenProcessor(torch.nn.Module):
             "role": [n_agent, 3], bool
             "id": [n_agent], int64
             "type": [n_agent], uint8
-            "position": [n_agent, n_step, 3], float32
+            "position": [n_agent, n_step, 3], float32    # [69, 91, 3]
             "heading": [n_agent, n_step], float32
             "velocity": [n_agent, n_step, 2], float32
             "shape": [n_agent, 3], float32
@@ -155,11 +155,11 @@ class TokenProcessor(torch.nn.Module):
         # ! prepare output dict
         tokenized_agent = {
             "num_graphs": data.num_graphs,
-            "type": data["agent"]["type"],
-            "shape": data["agent"]["shape"],
+            "type": data["agent"]["type"],  # [n_agent]
+            "shape": data["agent"]["shape"],  # [n_agent, 3]
             "ego_mask": data["agent"]["role"][:, 0],  # [n_agent]
             "token_agent_shape": agent_shape,  # [n_agent, 2]
-            "batch": data["agent"]["batch"],
+            "batch": data["agent"]["batch"],  # [n_agent]
             "token_traj_all": token_traj_all,  # [n_agent, n_token, 6, 4, 2]
             "token_traj": token_traj,  # [n_agent, n_token, 4, 2]
             # for step {5, 10, ..., 90}
@@ -170,8 +170,8 @@ class TokenProcessor(torch.nn.Module):
         # [n_token, 8]
         for k in ["veh", "ped", "cyc"]:
             tokenized_agent[f"trajectory_token_{k}"] = getattr(
-                self, f"agent_token_all_{k}"
-            )[:, -1].flatten(1, 2)
+                self, f"agent_token_all_{k}" # [2048, 6, 4, 2]
+            )[:, -1].flatten(1, 2) # [2048, -1, 4, 2] -> [2048, 8]
 
         # ! match token for each agent
         if not self.training:
@@ -233,12 +233,12 @@ class TokenProcessor(torch.nn.Module):
             _invalid_mask = ~_valid_mask
             out_dict["valid_mask"].append(_valid_mask)
 
-            #! gt_contour: [n_agent, 4, 2] in global coord
+            #! gt_contour: [n_agent, 4, 2] in global coord, (left_front, right_front, right_back, left_back)
             gt_contour = cal_polygon_contour(pos[:, i], heading[:, i], agent_shape)
             gt_contour = gt_contour.unsqueeze(1)  # [n_agent, 1, 4, 2]
 
             # ! tokenize without sampling
-            token_world_gt = transform_to_global(
+            token_world_gt = transform_to_global(    # [n_agent, n_token, 4, 2]
                 pos_local=token_traj.flatten(1, 2),  # [n_agent, n_token*4, 2]
                 head_local=None,
                 pos_now=prev_pos,  # [n_agent, 2]
@@ -252,13 +252,13 @@ class TokenProcessor(torch.nn.Module):
 
             # udpate prev_pos, prev_head
             prev_head = heading[:, i].clone()
-            dxy = token_contour_gt[:, 0] - token_contour_gt[:, 3]
+            dxy = token_contour_gt[:, 0] - token_contour_gt[:, 3] # [n_agent, 2] <- (left_front - right_back)
             prev_head[_valid_mask] = torch.arctan2(dxy[:, 1], dxy[:, 0])[_valid_mask]
             prev_pos = pos[:, i].clone()
-            prev_pos[_valid_mask] = token_contour_gt.mean(1)[_valid_mask]
+            prev_pos[_valid_mask] = token_contour_gt.mean(1)[_valid_mask]  # [n_agent, 2], mean pos of all 4 corners
             # add to output dict
-            out_dict["gt_idx"].append(token_idx_gt)
-            out_dict["gt_pos"].append(
+            out_dict["gt_idx"].append(token_idx_gt)  # list of [n_agent]
+            out_dict["gt_pos"].append( 
                 prev_pos.masked_fill(_invalid_mask.unsqueeze(1), 0)
             )
             out_dict["gt_heading"].append(prev_head.masked_fill(_invalid_mask, 0))

@@ -196,7 +196,7 @@ class SMARTAgentDecoder(nn.Module):
             self.shape_emb(agent_shape),
         ]  # List of len=2, shape [n_agent, hidden_dim]
 
-        x_a = self.x_a_emb(
+        x_a = self.x_a_emb( # FourierEmbedding cat with categorical_embs
             continuous_inputs=feature_a.view(-1, feature_a.size(-1)),
             categorical_embs=[
                 v.repeat_interleave(repeats=n_step, dim=0) for v in categorical_embs
@@ -205,7 +205,7 @@ class SMARTAgentDecoder(nn.Module):
         x_a = x_a.view(-1, n_step, self.hidden_dim)  # [n_agent, n_step, hidden_dim]
 
         feat_a = torch.cat((agent_token_emb, x_a), dim=-1)
-        feat_a = self.fusion_emb(feat_a)
+        feat_a = self.fusion_emb(feat_a)  # mlp
 
         if inference:
             return (
@@ -230,8 +230,8 @@ class SMARTAgentDecoder(nn.Module):
         mask,  # [n_agent, n_step]
         inference_mask=None,  # [n_agent, n_step]
     ):
-        pos_t = pos_a.flatten(0, 1)
-        head_t = head_a.flatten(0, 1)
+        pos_t = pos_a.flatten(0, 1) # [n_agent*n_step, 2]
+        head_t = head_a.flatten(0, 1) # [n_agent*n_step]
         head_vector_t = head_vector_a.flatten(0, 1)
 
         if self.hist_drop_prob > 0 and self.training:
@@ -241,16 +241,16 @@ class SMARTAgentDecoder(nn.Module):
             mask = mask & _mask_keep
 
         if inference_mask is not None:
-            mask_t = mask.unsqueeze(2) & inference_mask.unsqueeze(1)
+            mask_t = mask.unsqueeze(2) & inference_mask.unsqueeze(1) # [n_agent, n_step, n_step] <- [a, b, 1] & [a, 1, c] = [a, b, c]
         else:
             mask_t = mask.unsqueeze(2) & mask.unsqueeze(1)
 
-        edge_index_t = dense_to_sparse(mask_t)[0]
-        edge_index_t = edge_index_t[:, edge_index_t[1] > edge_index_t[0]]
+        edge_index_t = dense_to_sparse(mask_t)[0]  # [2, 228], [(source, target), num_edges] 
+        edge_index_t = edge_index_t[:, edge_index_t[1] > edge_index_t[0]]  # edges flow forward in time, no "backward" temporal dependencies
         edge_index_t = edge_index_t[
-            :, edge_index_t[1] - edge_index_t[0] <= self.time_span / self.shift
+            :, edge_index_t[1] - edge_index_t[0] <= self.time_span / self.shift  # (self.time_span / self.shift) = 6 = 30/5 ~ num_historical_steps/5?
         ]
-        rel_pos_t = pos_t[edge_index_t[0]] - pos_t[edge_index_t[1]]
+        rel_pos_t = pos_t[edge_index_t[0]] - pos_t[edge_index_t[1]] # [n_agent*n_step, 2]
         rel_pos_t = rel_pos_t[:, :2]
         rel_head_t = wrap_angle(head_t[edge_index_t[0]] - head_t[edge_index_t[1]])
         r_t = torch.stack(
@@ -425,7 +425,7 @@ class SMARTAgentDecoder(nn.Module):
             # [n_step*n_agent, hidden_dim]
             feat_a = feat_a.view(n_agent, n_step, -1).transpose(0, 1).flatten(0, 1)
             feat_a = self.pt2a_attn_layers[i](
-                (feat_map, feat_a), r_pl2a, edge_index_pl2a
+                (feat_map, feat_a), r_pl2a, edge_index_pl2a  # [((k,v),q), r, edge_index]
             )
             feat_a = self.a2a_attn_layers[i](feat_a, r_a2a, edge_index_a2a)
             feat_a = feat_a.view(n_step, n_agent, -1).transpose(0, 1)

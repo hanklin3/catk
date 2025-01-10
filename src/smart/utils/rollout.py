@@ -70,7 +70,7 @@ def transform_to_global(
     rot_mat[:, 0, 1] = sin
     rot_mat[:, 1, 0] = -sin
     rot_mat[:, 1, 1] = cos
-
+    # torch.bmm: batch matrix-matrix product. (batch, n, m) @ (batch, m, p) -> (batch, n, p)
     pos_global = torch.bmm(pos_local, rot_mat)  # [n_agent, n_step, 2]*[n_agent, 2, 2]
     pos_global = pos_global + pos_now.unsqueeze(1)
     if head_local is None:

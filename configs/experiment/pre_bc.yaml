@@ -16,7 +16,7 @@ model:
         num_k: 1 # for k nearest neighbors
         temp: 1.0
 
-ckpt_path: null
+# ckpt_path: logs/pre_bc-debug/runs/2024-12-18_19-17-33/checkpoints/epoch_009.ckpt #null
 # ckpt_path: CKPT_FOR_RESUME.ckpt # to resume training
 
 trainer:
@@ -26,7 +26,7 @@ trainer:
   max_epochs: 64
 
 data:
-  train_batch_size: 10
-  val_batch_size: 10
-  test_batch_size: 10
+  train_batch_size: 2 #10
+  val_batch_size: 4 #10
+  test_batch_size: 4 #10
   num_workers: 10

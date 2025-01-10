@@ -13,4 +13,4 @@ log_dir: ${paths.root_dir}/logs/
 output_dir: ${hydra:runtime.output_dir}
 
 # path to data directory
-cache_root: /scratch/cache/SMART
+cache_root: ../data/waymo_open_dataset_motion_v_1_2_1/uncompressed/scenario/cache/SMART #/scratch/cache/SMART

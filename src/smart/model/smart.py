@@ -187,6 +187,15 @@ class SMART(LightningModule):
             if self.global_rank == 0 and batch_idx < self.n_vis_batch:
                 if scenario_rollouts is not None:
                     for _i_sc in range(self.n_vis_scenario):
+                        # # if model_config.n_vis_batch > data.val_batch_size  
+                        # if _i_sc >= len(data["tfrecord_path"]):
+                        #     continue
+                        # try:
+                        #     data["tfrecord_path"][_i_sc]
+                        # except:
+                        #     print('error tfrecord_path', len(data["tfrecord_path"]), data["tfrecord_path"])
+                        #     print('_i_sc', _i_sc)
+                        #     continue
                         _vis = VisWaymo(
                             scenario_path=data["tfrecord_path"][_i_sc],
                             save_dir=self.video_dir

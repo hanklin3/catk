@@ -7,8 +7,15 @@ ACTION=validate # validate, test
 MY_EXPERIMENT="wosac_sub"
 MY_TASK_NAME=$MY_EXPERIMENT-$ACTION"-debug"
 
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate catk
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate catk
+
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate catk
+source /etc/profile
+# module load anaconda/Python-ML-2024b
+source activate catk
+
 python \
   -m src.run \
   experiment=$MY_EXPERIMENT \

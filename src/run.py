@@ -72,6 +72,7 @@ def run(cfg: DictConfig) -> None:
         }
     )
 
+    print('cfg.ckpt_path: ', cfg.ckpt_path)
     log.info(f"Resuming from ckpt: cfg.ckpt_path={cfg.ckpt_path}")
     if cfg.action == "fit":
         log.info("Starting training!")

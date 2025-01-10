@@ -80,7 +80,7 @@ class CrossEntropy(Metric):
             _thresh = token_agent_shape[:, 1] * self.gt_thresh_scale_length  # [n_agent]
             gt_valid = gt_valid & (dist < _thresh.unsqueeze(1))  # [n_agent, n_step]
 
-        # ! get prob_targets
+        # ! get prob_targets, transform_to_local gt to pred frame
         euclidean_target, euclidean_target_valid = get_euclidean_targets(
             pred_pos=pred_pos,
             pred_head=pred_head,
@@ -91,13 +91,13 @@ class CrossEntropy(Metric):
         )
         if self.rollout_as_gt and (next_token_action is not None):
             euclidean_target = next_token_action
-
+        # use contour to compute one-hot prob_target
         prob_target = get_prob_targets(
             target=euclidean_target,  # [n_agent, n_step, 3] x,y,yaw in local
             token_agent_shape=token_agent_shape,  # [n_agent, 2]
             token_traj=token_traj,  # [n_agent, n_token, 4, 2]
         )  # [n_agent, n_step, n_token] prob, last dim sum up to 1
-
+        # n_token = n_classes = token vocabulary size
         loss = cross_entropy(
             next_token_logits.transpose(1, 2),  # [n_agent, n_token, n_step], logits
             prob_target.transpose(1, 2),  # [n_agent, n_token, n_step], prob

@@ -519,3 +519,4 @@ if __name__ == "__main__":
     batch_process9s_transformer(
         args.input_dir, args.output_dir, args.split, num_workers=args.num_workers
     )
+    print(f'Data Creation {args.split} from {args.input_dir} to {args.output_dir} Successful!!!!')
