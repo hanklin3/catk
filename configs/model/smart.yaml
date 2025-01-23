@@ -13,7 +13,7 @@ model_config:
   val_closed_loop: true
   token_processor:
     map_token_file: "map_traj_token5.pkl"
-    agent_token_file: "cluster_frame_5_2048_remove_duplicate.pkl"
+    agent_token_file: "agent_vocab_555_s2.pkl"
     map_token_sampling: # open-loop
       num_k: 1 # for k nearest neighbors
       temp: 1.0 # uniform sampling
