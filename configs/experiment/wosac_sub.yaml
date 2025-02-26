@@ -14,7 +14,7 @@ model:
     val_closed_loop: true
     validation_rollout_sampling:
       criterium: topk_prob
-      num_k: 64 # for k most likely
+      num_k: 48 # for k most likely
       temp: 1.0
     wosac_submission:
       is_active: true

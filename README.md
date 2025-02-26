@@ -13,14 +13,23 @@
 > [arXiv Paper](https://arxiv.org/abs/2412.05334)
 
 ```bibtex
-@article{zhang2024closed,
+@inproceedings{zhang2025closed,
   title = {Closed-Loop Supervised Fine-Tuning of Tokenized Traffic Models},
   author = {Zhang, Zhejun and Karkus, Peter and Igl, Maximilian and Ding, Wenhao and Chen, Yuxiao and Ivanovic, Boris and Pavone, Marco},
-  journal={arXiv preprint arXiv:2412.05334},
-  year = {2024},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year = {2025},
 }
 ```
+
 ## News & Updates
+
+Feb. 2025
+- **Paper accepted at CVPR 2025:** Cheers!
+
+- **Model checkpoints for WOSAC:** The checkpoints for our WOSAC submission (SMART-tiny-CLSFT) can be downloaded from this [link](https://drive.google.com/drive/folders/16gndu21ri3kzLK4AJSKmCVQRjKv193o0?usp=sharing).
+By downloading our checkpoints, you must register on the [Waymo Open Dataset homepage](https://waymo.com/open/) and agree on Waymo's terms.
+
+- **SMART-mini and SMART-nano:** SMART-tiny with 7M parameters requires training on 8x A100 for a few days, which may be unaffordable in some cases. To address this, we have added config files for two smaller model, [smart_mini_3M.yaml](configs/model/smart_mini_3M.yaml) and [smart_nano_1M.yaml](configs/model/smart_nano_1M.yaml). Specifically, SMART-nano-1M can be trained on a single A100, but its performance is significantly worse. After pre-training and CAT-K fine-tuning, we achieved an RMM of 0.74 with SMART-nano-1M, which is 0.03 lower than that of SMART-tiny-7M. 
 
 Jan. 2025
 - **SoTA performance on WOSAC:** CAT-K is now rank #1 on the [WOSAC leaderboard](https://waymo.com/open/challenges/2024/sim-agents/)! We resolved an issue in the agent token vocabulary, and now our fine-tuned model achieves an RMM of **0.7702**. Even our reproduced SMART-tiny-7M (not published on the leaderboard, trained only for 32 epochs via BC) achieves an RMM of **0.7671**, which is comparable to the current second-place method. Reproducing our results should be straightforward. Give it a try!
