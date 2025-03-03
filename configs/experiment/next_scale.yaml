@@ -24,7 +24,7 @@ model:
       using_znorm_cos_sim_ow_L2: false
 
     decoder:
-      build_vqvae: false
+      build_vqvae: true
       build_var: false
       n_vq_emb: 32  # vqvae quantized vector emb size
       vq_vocab_size: 4096 # vqvae quantized vector latent vocab size
@@ -34,6 +34,9 @@ model:
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-18_19-17-33/checkpoints/epoch_009.ckpt #null
 # ckpt_path: CKPT_FOR_RESUME.ckpt # to resume training
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-19_10-04-48/checkpoints/last.ckpt
+# ckpt_path: logs/next_scale-vqvae_loss_vqvae_logits_gradFix/runs/2025-01-20_23-31-42/checkpoints/epoch_008.ckpt
+# ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_11-30-16/checkpoints/last.ckpt
+ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_15-33-32/checkpoints/epoch_005.ckpt
 
 trainer:
   limit_train_batches: 1.0
@@ -46,3 +49,5 @@ data:
   val_batch_size: 4 #10
   test_batch_size: 4 #10
   num_workers: 10
+
+action: fit #finetune

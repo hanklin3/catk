@@ -12,6 +12,7 @@
 # its affiliates is strictly prohibited.
 
 from typing import List
+import os
 
 import hydra
 import lightning as L
@@ -21,6 +22,9 @@ from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig
+from lightning.pytorch.plugins.precision import MixedPrecisionPlugin
+from torch.cuda.amp import GradScaler
+
 
 from src.utils import (
     RankedLogger,
@@ -33,6 +37,7 @@ from src.utils import (
 log = RankedLogger(__name__, rank_zero_only=True)
 
 torch.set_float32_matmul_precision("high")
+# torch.set_float32_matmul_precision("medium")
 
 
 def run(cfg: DictConfig) -> None:
@@ -54,6 +59,13 @@ def run(cfg: DictConfig) -> None:
     for _logger in logger:
         if isinstance(_logger, WandbLogger):
             _logger.watch(model, log="all")
+            
+    # # Initialize GradScaler
+    # scaler = GradScaler(init_scale=2. ** 11, growth_interval=1000)
+
+    # # Initialize MixedPrecisionPlugin with the scaler
+    # amp_plugin = MixedPrecisionPlugin(precision="16-mixed", device="cuda", scaler=scaler)
+
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(
@@ -71,7 +83,7 @@ def run(cfg: DictConfig) -> None:
             "trainer": trainer,
         }
     )
-
+    
     print('cfg.ckpt_path: ', cfg.ckpt_path)
     log.info(f"Resuming from ckpt: cfg.ckpt_path={cfg.ckpt_path}")
     if cfg.action == "fit":
@@ -97,6 +109,15 @@ def main(cfg: DictConfig) -> None:
 
     log.info("Printing config tree with Rich! <cfg.extras.print_config=True>")
     print_config_tree(cfg, resolve=True, save_to_file=True)
+
+    # copy agent_decoder.py to logs/experiment_name
+    os.system(f"cp src/smart/modules/agent_decoder.py logs/{cfg.task_name}/")
+    os.system(f"cp src/smart/model/smart.py logs/{cfg.task_name}/")
+    os.system(f"cp src/smart/metrics/cross_entropy.py logs/{cfg.task_name}/")
+    os.system(f"cp src/smart/model/quant.py logs/{cfg.task_name}/")
+    os.system(f"cp src/smart/model/vqvae.py logs/{cfg.task_name}/")
+    os.system(f"cp src/smart/model/basic_vae.py logs/{cfg.task_name}/")
+    os.system(f"cp src/smart/model/var.py logs/{cfg.task_name}/")
 
     run(cfg)  # train/val/test the model
 

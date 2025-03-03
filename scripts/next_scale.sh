@@ -32,9 +32,8 @@ ulimit -n 65536
 ulimit -n
 export COLUMNS=200 # increase hydra text length
 
-# MY_EXPERIMENT="pre_bc"
-MY_EXPERIMENT="clsft"
-MY_TASK_NAME=$MY_EXPERIMENT"-test"
+MY_EXPERIMENT="next_scale"
+MY_TASK_NAME=$MY_EXPERIMENT"-testCode"
 
 export MASTER_PORT=44144
 export MASTER_ADDR=127.0.0.1
@@ -56,4 +55,4 @@ torchrun \
   src.run \
   experiment=$MY_EXPERIMENT \
   task_name=$MY_TASK_NAME \
-  +config_name=run_clsft.yaml  # override @hydra.main(config_path="../configs/", config_name="run.yaml"
+  +config_name=run_scale.yaml  # override @hydra.main(config_path="../configs/", config_name="run.yaml"

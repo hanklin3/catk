@@ -20,13 +20,17 @@ from omegaconf import DictConfig
 from torch import Tensor
 from torch.distributions import Categorical
 from torch_geometric.data import HeteroData
+import torch.nn.functional as F
 
 from src.smart.utils import (
     cal_polygon_contour,
     transform_to_global,
     transform_to_local,
+    weight_init,
     wrap_angle,
 )
+
+from src.smart.layers import MLPLayer
 
 
 class TokenProcessor(torch.nn.Module):
@@ -37,16 +41,26 @@ class TokenProcessor(torch.nn.Module):
         agent_token_file: str,
         map_token_sampling: DictConfig,
         agent_token_sampling: DictConfig,
+        hidden_dim: int=4096
     ) -> None:
         super(TokenProcessor, self).__init__()
         self.map_token_sampling = map_token_sampling
         self.agent_token_sampling = agent_token_sampling
         self.shift = 5
+        self.hidden_dim = hidden_dim
 
         module_dir = os.path.dirname(__file__)
         self.init_agent_token(os.path.join(module_dir, agent_token_file))
         self.init_map_token(os.path.join(module_dir, map_token_file))
         self.n_token_agent = self.agent_token_all_veh.shape[0]
+
+        self.v_patch_nums = (1, 2, 3, 5, 9, 16, 18)
+        self.using_znorm = False
+
+        self.token_predict_head = MLPLayer(
+            input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=self.n_token_agent
+        )
+        self.apply(weight_init)
 
     @torch.no_grad()
     def forward(self, data: HeteroData) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
@@ -137,7 +151,7 @@ class TokenProcessor(torch.nn.Module):
         # ! collate width/length, traj tokens for current batch
         agent_shape, token_traj_all, token_traj = self._get_agent_shape_and_token_traj(
             data["agent"]["type"]
-        )
+        ) # hk: [n_agent, 2], [n_agent, n_token, 6, 4, 2], [n_agent, n_token, 4, 2], n_token=2048. 2048 means vocabulary size.
 
         # ! get raw trajectory data
         valid = data["agent"]["valid_mask"]  # [n_agent, n_step]
@@ -177,6 +191,7 @@ class TokenProcessor(torch.nn.Module):
         if not self.training:
             # [n_agent]
             tokenized_agent["gt_z_raw"] = data["agent"]["position"][:, 10, 2]
+        tokenized_agent["gt_z_raw"] = data["agent"]["position"][:, 10, 2]
 
         token_dict = self._match_agent_token(
             valid=valid,
@@ -191,7 +206,7 @@ class TokenProcessor(torch.nn.Module):
     def _match_agent_token(
         self,
         valid: Tensor,  # [n_agent, n_step]
-        pos: Tensor,  # [n_agent, n_step, 2]
+        pos: Tensor,  # [n_agent, n_step, 2] 
         heading: Tensor,  # [n_agent, n_step]
         agent_shape: Tensor,  # [n_agent, 2]
         token_traj: Tensor,  # [n_agent, n_token, 4, 2]
@@ -204,7 +219,7 @@ class TokenProcessor(torch.nn.Module):
             "valid_mask": [n_agent, n_step_token]
             "gt_idx": [n_agent, n_step_token]
             # ! at step [5, 10, 15, ..., 90]
-            "gt_pos": [n_agent, n_step_token, 2]
+            "gt_pos": [n_agent, n_step_token, 2]  # hk: token class not xy. from token_traj transform_to_global to gt_pos_raw 
             "gt_heading": [n_agent, n_step_token]
             # ! noisy sampling for training data augmentation
             "sampled_idx": [n_agent, n_step_token]
@@ -268,7 +283,9 @@ class TokenProcessor(torch.nn.Module):
                 out_dict["sampled_idx"].append(out_dict["gt_idx"][-1])
                 out_dict["sampled_pos"].append(out_dict["gt_pos"][-1])
                 out_dict["sampled_heading"].append(out_dict["gt_heading"][-1])
+                # print('No sampling in token_processor for sampled_pos')
             else:
+                assert False, "Should be no sampling in token_processor"
                 # contour: [n_agent, n_token, 4, 2], 2HZ, global coord
                 token_world_sample = transform_to_global(
                     pos_local=token_traj.flatten(1, 2),  # [n_agent, n_token*4, 2]
@@ -306,6 +323,145 @@ class TokenProcessor(torch.nn.Module):
                 )
         out_dict = {k: torch.stack(v, dim=1) for k, v in out_dict.items()}
         return out_dict
+    
+    def _match_agent_token_next_scale(
+        self,
+        valid: Tensor,  # [n_agent, n_step]
+        pos: Tensor,  # [n_agent, n_step, 2] # [69, 91, 2]
+        heading: Tensor,  # [n_agent, n_step]
+        agent_shape: Tensor,  # [n_agent, 2]
+        token_traj: Tensor,  # [n_agent, n_token, 4, 2]
+    ) -> Dict[str, Tensor]:
+        """n_step_token=n_step//5
+        n_step_token=18 for train with BC.
+        n_step_token=2 for val/test and train with closed-loop rollout.
+        Returns: Dict
+            # ! action that goes from [(0->5), (5->10), ..., (85->90)]
+            "valid_mask": [n_agent, n_step_token]
+            "gt_idx": [n_agent, n_step_token]
+            # ! at step [5, 10, 15, ..., 90]
+            "gt_pos": [n_agent, n_step_token, 2]
+            "gt_heading": [n_agent, n_step_token]
+            # ! noisy sampling for training data augmentation
+            "sampled_idx": [n_agent, n_step_token]
+            "sampled_pos": [n_agent, n_step_token, 2]
+            "sampled_heading": [n_agent, n_step_token]
+        """
+        num_k = self.agent_token_sampling.num_k if self.training else 1
+        n_agent, n_step = valid.shape
+        range_a = torch.arange(n_agent)
+
+        prev_pos, prev_head = pos[:, 0], heading[:, 0]  # [n_agent, 2], [n_agent]
+        prev_pos_sample, prev_head_sample = pos[:, 0], heading[:, 0]
+
+        out_dict = {
+            "valid_mask": [],
+            "gt_idx": [],
+            "gt_pos": [],
+            "gt_heading": [],
+            # "sampled_idx": [],
+            # "sampled_pos": [],
+            # "sampled_heading": [],
+        }
+
+        for i in range(self.shift, n_step, self.shift):  # [5, 10, 15, ..., 90]
+            _valid_mask = valid[:, i - self.shift] & valid[:, i]  # [n_agent]
+            _invalid_mask = ~_valid_mask
+            out_dict["valid_mask"].append(_valid_mask)
+
+            #! gt_contour: [n_agent, 4, 2] in global coord, (left_front, right_front, right_back, left_back)
+            gt_contour = cal_polygon_contour(pos[:, i], heading[:, i], agent_shape)
+            gt_contour = gt_contour.unsqueeze(1)  # [n_agent, 1, 4, 2]
+
+            # ! tokenize without sampling
+            token_world_gt = transform_to_global(    # [n_agent, n_token, 4, 2]
+                pos_local=token_traj.flatten(1, 2),  # [n_agent, n_token*4, 2]
+                head_local=None,
+                pos_now=prev_pos,  # [n_agent, 2]
+                head_now=prev_head,  # [n_agent]
+            )[0].view(*token_traj.shape)
+            token_idx_gt = torch.argmin(
+                torch.norm(token_world_gt - gt_contour, dim=-1).sum(-1), dim=-1
+            )  # [n_agent]
+            # [n_agent, 4, 2]
+            token_contour_gt = token_world_gt[range_a, token_idx_gt]
+
+            # udpate prev_pos, prev_head
+            prev_head = heading[:, i].clone()
+            dxy = token_contour_gt[:, 0] - token_contour_gt[:, 3] # [n_agent, 2] <- (left_front - right_back)
+            prev_head[_valid_mask] = torch.arctan2(dxy[:, 1], dxy[:, 0])[_valid_mask]
+            prev_pos = pos[:, i].clone()
+            prev_pos[_valid_mask] = token_contour_gt.mean(1)[_valid_mask]  # [n_agent, 2], mean pos of all 4 corners
+            # add to output dict
+            out_dict["gt_idx"].append(token_idx_gt)  # list of [n_agent]
+            out_dict["gt_pos"].append( 
+                prev_pos.masked_fill(_invalid_mask.unsqueeze(1), 0)
+            )
+            out_dict["gt_heading"].append(prev_head.masked_fill(_invalid_mask, 0))
+
+        out_dict = {k: torch.stack(v, dim=1) for k, v in out_dict.items()}
+
+        # use out_dict["gt_pos"], run through a encoder MLPLayer, and output f_BCt
+        # Since out_dict["gt_pos"] has shape [n_agent, n_step=18, 2]
+        # and out_features=2 to get the desired output shape [n_agent, (x,y), n_step]
+        _, n_step_gt, _ = out_dict["gt_pos"].shape
+        encoder = MLPLayer(input_dim=n_agent*n_step_gt*2, hidden_dim=self.hidden_dim, output_dim=n_agent*n_step_gt*2).to(out_dict["gt_pos"].device)  
+        f_BCt = encoder(out_dict["gt_pos"].reshape(-1)).reshape(n_agent, n_step_gt, 2).permute(0, 2, 1)  # [n_agent*n_step, 2] -> [n_agent, n_step, 2] -> [n_agent, (x,y), n_step]
+
+        with torch.cuda.amp.autocast(enabled=False):
+            mean_vq_loss: torch.Tensor = 0.0
+            vocab_hit_V = torch.zeros(self.vocab_size, dtype=torch.float, device=f_BCt.device)
+            SN = len(self.v_patch_nums)
+            for si, pn in enumerate(self.v_patch_nums): # from small to large
+                # find the nearest embedding
+                if self.using_znorm: # using_znorm=True (cosine similarity)
+                    rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (si != SN-1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C) # (B, h, w, C) -> (B*h*w, C)
+                    rest_NC = F.normalize(rest_NC, dim=-1) # Normalizes the feature map points rest_NC along the embedding dimension C (L2 norm).
+                    # Normalizes the codebook embeddings along each row, dot product with normalized rest_NC which gives cosine similarity scores.
+                    # Finds the index of the embedding k with the highest cosine similarity for each feature point.
+                    idx_N = torch.argmax(rest_NC @ F.normalize(self.embedding.weight.data.T, dim=0), dim=1) # (B*h*w, C) @ (C, vocab_size) -> (B*h*w, vocab_size) -> argmax -> (B*h*w)
+                else: # using_znorm=False (Euclidean distance).
+                    rest_NC = F.interpolate(f_rest, size=(pn, pn), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (si != SN-1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C) # (B, h, w, C) -> (B*h*w, C)
+                    # ||x - e_k||^2 = ||x||^2 + ||e_k||^2 - 2 * x * e_k
+                    # ||x||^2 -> (B*h*w, C) ==> ||x||^2 = sum(x^2, dim=1, keepdim=True) -> (B*h*w, 1) 
+                    # ||e_k||^2 -> (vocab_size, C) ==> ||e_k||^2 = sum(e_k^2, dim=1, keepdim=False) -> (vocab_size,)
+                    d_no_grad = torch.sum(rest_NC.square(), dim=1, keepdim=True) + torch.sum(self.embedding.weight.data.square(), dim=1, keepdim=False) # (B*h*w, 1) + (vocab_size,) -> (B*h*w, vocab_size)
+                    # -2 * x * e_k = -2 * x @ e_k^T. addmm_ is in-place operation, input = beta * input + alpha * mat1 @ mat2
+                    d_no_grad.addmm_(rest_NC, self.embedding.weight.data.T, alpha=-2, beta=1)  # (B*h*w, C) @ (C, vocab_size) -> (B*h*w, vocab_size), addmm_ is in-place operation
+                    idx_N = torch.argmin(d_no_grad, dim=1) # (B*h*w)
+
+                    # Combine x and y into a trajectory tensor of shape (batch_size, 2, num_original_points)
+                    trajectory = torch.stack([x_points, y_points], dim=1)  # Shape: (batch_size, 2, num_original_points)
+
+                    # Interpolate to 5 points using linear interpolation
+                    upsampled_trajectory = F.interpolate(trajectory, size=num_upsampled_points, mode='linear', align_corners=True)
+                
+                hit_V = idx_N.bincount(minlength=self.vocab_size).float() # count the number of occurrences of each value in the tensor idx_N
+                if self.training:
+                    if dist.initialized(): handler = tdist.all_reduce(hit_V, async_op=True)
+                
+                # calc loss
+                idx_Bhw = idx_N.view(B, pn, pn) # (B*h*w) -> (B, h, w)
+                # h_BChw: quantized lookup embedding. interpolate/upscale the embeddings (h,w) to the same full size (H, W) as the feature map, then permute the tensor to (B, C, H, W), 
+                h_BChw = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else self.embedding(idx_Bhw).permute(0, 3, 1, 2).contiguous()
+                h_BChw = self.quant_resi[si/(SN-1)](h_BChw)  # A refinement step is applied to the quantized embeddings h_BChw for the current scale.
+                                                             # The refinement step is a convolutional layer with kernel size 3x3 and stride 1.
+                f_hat = f_hat + h_BChw # Accumulates the reconstructed feature map from quantized embeddings, approximate feature map f_BChw. shape (B, C, H, W)
+                f_rest -= h_BChw # Updates the residual f_rest by removing the contribution of the current scale's embeddings h_BChw.
+                                 # passes the remaining unexplained features to the next finer scale.
+                if self.training and dist.initialized():
+                    handler.wait() # The codebook vectors are updated via EMA, which aligns them with the latent space without relying on gradient updates.
+                    if self.record_hit == 0: self.ema_vocab_hit_SV[si].copy_(hit_V) # Exponential Moving Average (EMA). hit_V histogram of embeddings
+                    elif self.record_hit < 100: self.ema_vocab_hit_SV[si].mul_(0.9).add_(hit_V.mul(0.1)) # EMA = 0.9 * EMA + 0.1 * hit_V
+                    else: self.ema_vocab_hit_SV[si].mul_(0.99).add_(hit_V.mul(0.01)) # EMA = 0.99 * EMA + 0.01 * hit_V
+                    self.record_hit += 1
+                vocab_hit_V.add_(hit_V)
+                mean_vq_loss += F.mse_loss(f_hat.data, f_BChw).mul_(self.beta) + F.mse_loss(f_hat, f_no_grad)
+                # Commitment loss: make sure encoder output f_BChw  ze(x)  commits to the quantized embeddings (f_hat.data) (.data detach from graph), sg[e]. 
+                # Dictionary Loss: ensures the quantized embeddings f_hat accurately reconstruct the encoder output feature map f_no_grad
+            mean_vq_loss *= 1. / SN
+            f_hat = (f_hat.data - f_no_grad).add_(f_BChw)
+
 
     @staticmethod
     def _clean_heading(valid: Tensor, heading: Tensor) -> Tensor:
@@ -347,7 +503,7 @@ class TokenProcessor(torch.nn.Module):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
         agent_shape: [n_agent, 2]
-        token_traj_all: [n_agent, n_token, 6, 4, 2]
+        token_traj_all: [n_agent, n_token, 6, 4, 2] # hk: 6 is for 10Hz, from time 0 to 0.5s, index from 0 to 5
         token_traj: [n_agent, n_token, 4, 2]
         """
         agent_type_masks = {
@@ -371,7 +527,8 @@ class TokenProcessor(torch.nn.Module):
 
             token_traj_all += mask[:, None, None, None, None] * (
                 getattr(self, f"agent_token_all_{k}").unsqueeze(0)
-            )
+            ) # [n_agents, 2048, 6, 4, 2]
 
-        token_traj = token_traj_all[:, :, -1, :, :].contiguous()
+        token_traj = token_traj_all[:, :, -1, :, :].contiguous() # [n_agents, 2048, 4, 2] # current time?
+
         return agent_shape, token_traj_all, token_traj

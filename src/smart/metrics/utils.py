@@ -60,8 +60,8 @@ def get_euclidean_targets(
         target: [n_agent, 16, 3], x,y,yaw
         target_valid: [n_agent, 16]
     """
-    gt_last_pos = gt_pos.roll(shifts=-1, dims=1).flatten(0, 1)
-    gt_last_head = gt_head.roll(shifts=-1, dims=1).flatten(0, 1)
+    gt_last_pos = gt_pos.roll(shifts=-1, dims=1).flatten(0, 1) # hk: [n_agent*18, 2]
+    gt_last_head = gt_head.roll(shifts=-1, dims=1).flatten(0, 1) # hk: [n_agent*18]
     gt_last_valid = gt_valid.roll(shifts=-1, dims=1)  # [n_agent, 18]
     gt_last_valid[:, -1:] = False  # [n_agent, 18]
 
@@ -76,7 +76,7 @@ def get_euclidean_targets(
     target_pos = target_pos.squeeze(1).view(gt_pos.shape)  # n_agent, 18, 2]
     target_head = wrap_angle(target_head)  # [n_agent, 18]
     target_head = target_head.squeeze(1).view(gt_head.shape)
-    target = torch.cat((target_pos, target_head.unsqueeze(-1)), dim=-1)
+    target = torch.cat((target_pos, target_head.unsqueeze(-1)), dim=-1) # hk: [n_agent, 18, 3]
 
     # truncate [(5->10), ..., (90->5)] to [(10->15), ..., (85->90)]
     target = target[:, 1:-1]  # [n_agent, 16, 3], x,y,yaw

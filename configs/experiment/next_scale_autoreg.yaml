@@ -1,0 +1,92 @@
+# @package _global_
+
+defaults:
+  # - override /trainer: ddp
+  - override /model: smart
+
+model:
+  model_config:
+    # lr: 5e-4
+    # lr: 1e-4
+    # lr: 5e-5
+    lr: 1e-5
+    lr_min_ratio: 1e-2
+    token_processor:
+      map_token_sampling: # open-loop
+        num_k: 1 # for k nearest neighbors
+        temp: 1.0 # uniform sampling
+      agent_token_sampling: # closed-loop
+        num_k: 1 # for k nearest neighbors
+        temp: 1.0
+    gradient_clip_val: 5e-2
+    gradient_clip_algorithm: "norm" # "value" or "norm"
+    # overflow_new_scale: 32768.0 # fp16 overflows >65536.0
+    overflow_new_scale: 65536.0 # for bfloat16, which has same range as fp32
+
+    training_rollout_sampling:
+      criterium: next_scale_autoreg # {topk_dist_sampled_with_prob, topk_prob, topk_prob_sampled_with_dist}
+      num_k: 1 # for k nearest neighbors, set to -1 to turn-off closed-loop training
+      temp: 1e-5 # catk = topk_prob_sampled_with_dist with temp=1e-5
+      n_points_per_level: [1, 2, 3, 5, 9, 16, 18]
+      using_znorm_cos_sim_ow_L2: false
+      num_k_catk: 32 # sampling after VAR # default 32
+      # num_k_catk: 12 # sampling after VAR # default 32
+    validation_rollout_sampling:
+      criterium: topk_prob
+      num_k: 5 # for k most likely
+      temp: 1.0
+
+    decoder:
+      build_vqvae: true
+      build_var: true
+      n_vq_emb: 32  # vqvae quantized vector emb size
+      vq_vocab_size: 4096 # vqvae quantized vector latent vocab size
+      # no finetuen vqvae
+      # var_precision: bfloat16 # float16 or bfloat16 (truncated 32-bit) or null (full 32-bit)
+      # finetune_vqvae: false # if build_var is true, finetune_vqvae. (SMART before vae is still frozen).
+      
+      # finetune vqvae
+      var_precision: "bfloat16" # float16 or bfloat16 (truncated 32-bit) or null (full 32-bit)
+      finetune_vqvae: true # if build_var is true, finetune_vqvae. (SMART before vae is still frozen).
+
+# ckpt_path: logs/pre_bc-debug/runs/2024-12-18_19-17-33/checkpoints/epoch_009.ckpt #null
+# ckpt_path: CKPT_FOR_RESUME.ckpt # to resume training
+# ckpt_path: logs/pre_bc-debug/runs/2024-12-19_10-04-48/checkpoints/last.ckpt
+# ckpt_path: logs/next_scale-0003_vqvae_loss_using_logits__loss_sum_fix/runs/2025-01-21_09-45-24/checkpoints/epoch_063.ckpt
+# ckpt_path: logs/next_scale-0004_vocabSize4096_Cvae64_vqvae_varClass/runs/2025-02-03_23-38-25/checkpoints/last.ckpt
+# ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_23-38-22/checkpoints/last.ckpt # base vqvae
+# ckpt_path: logs/next_scale_var-0005_VAR_32-true_fullvqvae/runs/2025-02-12_00-32-29/checkpoints/epoch_004.ckpt
+# ckpt_path: logs/next_scale_autoreg-0006_VAR/runs/2025-02-12_01-44-18/checkpoints/epoch_005.ckpt
+# ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_23-38-22/checkpoints/last.ckpt
+# ckpt_path: logs/next_scale_var-0006_VAR_32-true_fullvqvae_overflow/runs/2025-02-17_16-40-33/checkpoints/epoch_009.ckpt
+# ckpt_path: logs/next_scale_autoreg-0007_VAR_auto_32b_overflow/runs/2025-02-17_17-45-23/checkpoints/epoch_012.ckpt
+# ckpt_path: logs/next_scale_autoreg-0007-2_VAR_auto_32b_overflow_schedulerLR/runs/2025-02-18_07-36-46/checkpoints/epoch_034.ckpt
+# ckpt_path: logs/next_scale_autoreg-0008_VAR_bfloat16_finetune_vqvae/runs/2025-02-18_04-09-21/checkpoints/epoch_011.ckpt
+# ckpt_path: logs/next_scale_autoreg-0009_VAR_bfloat16_finetune_vqvae_LR1e-5/runs/2025-02-21_09-32-27/checkpoints/epoch_040.ckpt
+# ckpt_path: logs/next_scale_autoreg-0009b_VAR_bfloat16_finetune_vqvae_LR1e-5/runs/2025-02-24_08-44-17/checkpoints/epoch_046.ckpt
+# ckpt_path: logs/next_scale_autoreg-00011_VAR_ang_acc100x_bfloat16_finetune_vqvae/runs/2025-02-25_17-30-46/checkpoints/epoch_000.ckpt
+ckpt_path: logs/next_scale_autoreg-00010_VAR_ang_acc_bfloat16_finetune_vqvae/runs/2025-02-25_17-13-02/checkpoints/epoch_000.ckpt
+
+
+trainer:
+  limit_train_batches: 1.0
+  limit_val_batches: 0.1
+  check_val_every_n_epoch: 1
+  max_epochs: 64
+  # gradient_clip_val: 1e-3
+  # val_check_interval : 4
+  # precision: bf16
+  precision: 32-true
+
+data:
+  # train_batch_size: 2 #10
+  # train_batch_size: 4
+  train_batch_size: 1
+  # train_batch_size: 1 # finetuen vqvae and SMART
+  val_batch_size: 4 #10
+  test_batch_size: 4 #10
+  num_workers: 10
+
+# action: finetune  # if only load vqvae (all weights doesn't have to match)
+action: fit # resume previous failed training (all weights have to match)
+# action: validate

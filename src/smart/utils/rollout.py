@@ -103,11 +103,11 @@ def transform_to_local(
 
 
 def sample_next_token_traj(
-    token_traj: Tensor,  # [n_agent, n_token, 4, 2]
-    token_traj_all: Tensor,  # [n_agent, n_token, 6, 4, 2]
+    token_traj: Tensor,  # [n_agent, n_token, 4, 2] # hk: all vocab tokens in current timestep? token_traj_all[:, : -1, :, :]
+    token_traj_all: Tensor,  # [n_agent, n_token, 6, 4, 2] # hk: all vocab tokens history to current timestep?
     sampling_scheme: DictConfig,
     # ! for most-likely sampling
-    next_token_logits: Tensor,  # [n_agent, n_token], with grad
+    next_token_logits: Tensor,  # [n_agent, n_token], with grad # hk: [n_agent, n_token=distr_vocab_size]
     # ! for nearest-pos sampling, sampling near to GT
     pos_now: Tensor,  # [n_agent, 2]
     head_now: Tensor,  # [n_agent]
@@ -117,6 +117,9 @@ def sample_next_token_traj(
     token_agent_shape: Tensor,  # [n_agent, 2]
 ) -> Tuple[Tensor, Tensor]:
     """
+    both topk_prob_sampled_with_dist and topk_dist_sampled_with_prob
+    use next_token_logits.
+
     Returns:
         next_token_traj_all: [n_agent, 6, 4, 2], local coord
         next_token_idx: [n_agent], without grad
@@ -130,14 +133,14 @@ def sample_next_token_traj(
     ):
         topk_logits, topk_indices = torch.topk(
             next_token_logits, sampling_scheme.num_k, dim=-1, sorted=False
-        )
+        ) # hk: [n_agent, K], [n_agent, K]
         if sampling_scheme.criterium == "topk_prob_sampled_with_dist":
             #! gt_contour: [n_agent, 4, 2] in global coord
             gt_contour = cal_polygon_contour(
                 pos_next_gt, head_next_gt, token_agent_shape
             )
             gt_contour = gt_contour.unsqueeze(1)  # [n_agent, 1, 4, 2]
-            token_world_sample = token_traj[range_a.unsqueeze(1), topk_indices]
+            token_world_sample = token_traj[range_a.unsqueeze(1), topk_indices] # hk: [n_agent, K, 4, 2]
             token_world_sample = transform_to_global(
                 pos_local=token_world_sample.flatten(1, 2),
                 head_local=None,
@@ -145,11 +148,11 @@ def sample_next_token_traj(
                 head_now=head_now,  # [n_agent]
             )[0].view(*token_world_sample.shape)
 
-            # dist: [n_agent, n_token]
+            # dist: [n_agent, n_token] # hk: [n_agent, K]. L2 norm of each box corner point. mean over 4 box corner points into center point. 
             dist = torch.norm(token_world_sample - gt_contour, dim=-1).mean(-1)
             topk_logits = topk_logits.masked_fill(
                 valid_next_gt.unsqueeze(1), 0.0
-            ) - 1.0 * dist.masked_fill(~valid_next_gt.unsqueeze(1), 0.0)
+            ) - 1.0 * dist.masked_fill(~valid_next_gt.unsqueeze(1), 0.0) # valid: 0. invalid: -1.0 dist. penalize invalid GT by lowering logits prob with dist
     elif sampling_scheme.criterium == "topk_dist_sampled_with_prob":
         #! gt_contour: [n_agent, 4, 2] in global coord
         gt_contour = cal_polygon_contour(pos_next_gt, head_next_gt, token_agent_shape)
@@ -159,12 +162,12 @@ def sample_next_token_traj(
             head_local=None,
             pos_now=pos_now,  # [n_agent, 2]
             head_now=head_now,  # [n_agent]
-        )[0].view(*token_traj.shape)
+        )[0].view(*token_traj.shape) # hk: [n_agent, n_token=K, 4, 2]
 
         _invalid = ~valid_next_gt
         # dist: [n_agent, n_token]
         dist = torch.norm(token_world_sample - gt_contour, dim=-1).mean(-1)
-        _logits = -1.0 * dist.masked_fill(_invalid.unsqueeze(1), 0.0)
+        _logits = -1.0 * dist.masked_fill(_invalid.unsqueeze(1), 0.0) # smaller dist --> less neg --> higher logits
 
         if _invalid.any():
             _logits[_invalid] = next_token_logits[_invalid]

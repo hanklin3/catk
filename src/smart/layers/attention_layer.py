@@ -57,9 +57,9 @@ class AttentionLayer(MessagePassing):
 
     def forward(
         self,
-        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-        r: Optional[torch.Tensor],
-        edge_index: torch.Tensor,
+        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], # hk: x (num_nodes, hidden_dim), x_src (num_edges, hidden_dim), x_dst (num_edges, hidden_dim)
+        r: Optional[torch.Tensor], # hk: (num_nodes, hidden_dim), r is the position embedding
+        edge_index: torch.Tensor, # hk: (2, num_edges), edge_index of the graph
     ) -> torch.Tensor:
         if isinstance(x, torch.Tensor):
             x_src = x_dst = self.attn_prenorm_x_src(x)
@@ -79,12 +79,12 @@ class AttentionLayer(MessagePassing):
         q_i: torch.Tensor,
         k_j: torch.Tensor,
         v_j: torch.Tensor,
-        r: Optional[torch.Tensor],
-        index: torch.Tensor,
+        r: Optional[torch.Tensor], # hk: pairwise relative position embedding
+        index: torch.Tensor, # hk: only compute softmax for numbers winthin that group. Same group has same index [0, 0, 1, 1, 2, ]
         ptr: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        if self.has_pos_emb and r is not None:
-            k_j = k_j + self.to_k_r(r).view(-1, self.num_heads, self.head_dim)
+        if self.has_pos_emb and r is not None: # hK:  linear layers that map the relative pos into same dim of k_j and v_j
+            k_j = k_j + self.to_k_r(r).view(-1, self.num_heads, self.head_dim) 
             v_j = v_j + self.to_v_r(r).view(-1, self.num_heads, self.head_dim)
         sim = (q_i * k_j).sum(dim=-1) * self.scale # similarity between query (q_i) and key (k_j) using scaled dot-product attention
         attn = softmax(sim, index, ptr)

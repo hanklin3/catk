@@ -11,7 +11,10 @@ MY_TASK_NAME=$MY_EXPERIMENT-K$VAL_K"-debug"
 
 # source ~/miniconda3/etc/profile.d/conda.sh
 # conda activate catk
-source activate catk
+# source activate catk
+
+source activate var_catk
+module load anaconda/Python-ML-2024b
 
 export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
 

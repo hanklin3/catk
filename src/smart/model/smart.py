@@ -18,6 +18,7 @@ import hydra
 import torch
 from lightning import LightningModule
 from torch.optim.lr_scheduler import LambdaLR
+from torch.cuda.amp import GradScaler
 
 from src.smart.metrics import (
     CrossEntropy,
@@ -31,6 +32,8 @@ from src.smart.tokens.token_processor import TokenProcessor
 from src.smart.utils.finetune import set_model_for_finetuning
 from src.utils.vis_waymo import VisWaymo
 from src.utils.wosac_utils import get_scenario_id_int_tensor, get_scenario_rollouts
+
+from .var import VAR
 
 
 class SMART(LightningModule):
@@ -69,12 +72,40 @@ class SMART(LightningModule):
         self.video_dir = Path(self.video_dir) / "videos"
 
         self.training_rollout_sampling = model_config.training_rollout_sampling
-        self.validation_rollout_sampling = model_config.validation_rollout_sampling
+        self.validation_rollout_sampling = model_config.validation_rollout_sampling\
+        
+        # Important: This property (False) activates manual optimization.
+        self.automatic_optimization = False
+        
+        # Gradient clipping and new scale for overflow
+        self.scaler = torch.cuda.amp.GradScaler(init_scale=2. ** 11, growth_interval=1000)
+        self.gradient_clip_val = model_config.gradient_clip_val
+        self.gradient_clip_algorithm = model_config.gradient_clip_algorithm
+        self.overflow_new_scale = model_config.overflow_new_scale
 
     def training_step(self, data, batch_idx):
         tokenized_map, tokenized_agent = self.token_processor(data)
         if self.training_rollout_sampling.num_k <= 0:
             pred = self.encoder(tokenized_map, tokenized_agent)
+        elif self.training_rollout_sampling.criterium == "next_scale": # behavior cloning
+            pred = self.encoder.open_next_scale(
+                tokenized_map, 
+                tokenized_agent, 
+                sampling_scheme=self.training_rollout_sampling,
+                train_mask=data["agent"]["train_mask"],  # [n_agent]
+            )
+        elif self.training_rollout_sampling.criterium == "next_scale_var": # openshot next-scale training
+            pred = self.encoder.next_scale_var(
+                tokenized_map, 
+                tokenized_agent, 
+                sampling_scheme=self.training_rollout_sampling
+            )
+        elif self.training_rollout_sampling.criterium == "next_scale_autoreg": # autoregressive next-scale
+            pred = self.encoder.next_scale_autoreg(
+                tokenized_map, 
+                tokenized_agent, 
+                sampling_scheme=self.training_rollout_sampling
+            )
         else:
             pred = self.encoder.inference(
                 tokenized_map,
@@ -82,15 +113,71 @@ class SMART(LightningModule):
                 sampling_scheme=self.training_rollout_sampling,
             )
 
-        loss = self.training_loss(
+        opt = self.optimizers()
+        # scheduler = self.lr_schedulers()
+        opt.zero_grad()
+
+        loss_dict = self.training_loss(
             **pred,
             token_agent_shape=tokenized_agent["token_agent_shape"],  # [n_agent, 2]
             token_traj=tokenized_agent["token_traj"],  # [n_agent, n_token, 4, 2]
             train_mask=data["agent"]["train_mask"],  # [n_agent]
             current_epoch=self.current_epoch,
         )
-        self.log("train/loss", loss, on_step=True, batch_size=1)
+        loss = loss_dict["loss"]
 
+        # self.manual_backward(loss)
+        # opt.step()
+        
+        self.scaler.scale(loss).backward()
+        
+        # import pdb; pdb.set_trace()
+        
+        scaler_sc: float = self.scaler.get_scale()
+        overflow_found = False
+        if scaler_sc > self.overflow_new_scale: # fp16 will overflow when >65536, so multiply 32768 could be dangerous
+            print("OVERFLOW found: scaler scaler_sc > 32768, reducing scale to 32768")
+            overflow_found = True
+        #     self.scaler.update(new_scale=32768.)
+        
+        nan_grad_found = False
+        for name, param in self.encoder.named_parameters():
+            if param.grad is not None and torch.any(torch.isnan(param.grad)):
+                nan_grad_found = True
+                print(f"NaN gradient found in {name}")
+                break
+            
+        # early clip gradients
+        self.clip_gradients(opt, gradient_clip_val=self.gradient_clip_val, 
+                            gradient_clip_algorithm=self.gradient_clip_algorithm)
+
+        if overflow_found or nan_grad_found:
+             # fp16 will overflow when >65536, so multiply 32768 could be dangerous
+            print("nan grad found, reducing scale")
+            self.scaler.update(new_scale=self.overflow_new_scale)
+        else:
+            self.scaler.step(opt)
+            self.scaler.update()
+            
+        # scheduler.step()
+
+        self.log("train/loss", loss_dict["loss"], on_step=True, batch_size=1)
+        self.log("train/loss_cross_entropy", loss_dict["cross_entropy_loss"], on_step=True, batch_size=1)
+        self.log("train/loss_vq", loss_dict["loss_commitment_dictionary"], on_step=True, batch_size=1)
+        self.log("train/loss_vqvae", loss_dict["loss_vqvae"], on_step=True, batch_size=1)
+        self.log("train/loss_var", loss_dict["loss_var"], on_step=True, batch_size=1)
+        self.log("train/loss_angular_acc", loss_dict["loss_angular_acc"], on_step=True, batch_size=1)
+        
+        print('\n')
+        print('self.loss_sum / self.count', loss_dict["loss"])
+        print('self.loss_vq', loss_dict["loss_commitment_dictionary"])
+        print('self.cross_entropy_loss / self.count', loss_dict["cross_entropy_loss"])
+        print('self.loss_vqvae / self.count', loss_dict["loss_vqvae"])
+        print('self.loss_var', loss_dict["loss_var"])
+        print('self.loss_angular_acc', loss_dict["loss_angular_acc"])
+        
+        assert not torch.isnan(loss_dict["loss_var"]), loss_dict["loss_var"]
+        
         return loss
 
     def validation_step(self, data, batch_idx):
@@ -99,12 +186,12 @@ class SMART(LightningModule):
         # ! open-loop vlidation
         if self.val_open_loop:
             pred = self.encoder(tokenized_map, tokenized_agent)
-            loss = self.training_loss(
+            loss_dict  = self.training_loss(
                 **pred,
                 token_agent_shape=tokenized_agent["token_agent_shape"],  # [n_agent, 2]
                 token_traj=tokenized_agent["token_traj"],  # [n_agent, n_token, 4, 2]
             )
-
+            loss = loss_dict["loss"]
             self.TokenCls.update(
                 # action that goes from [(10->15), ..., (85->90)]
                 pred=pred["next_token_logits"],  # [n_agent, 16, n_token]
@@ -125,9 +212,14 @@ class SMART(LightningModule):
         if self.val_closed_loop:
             pred_traj, pred_z, pred_head = [], [], []
             for _ in range(self.n_rollout_closed_val):
-                pred = self.encoder.inference(
-                    tokenized_map, tokenized_agent, self.validation_rollout_sampling
-                )
+                if self.training_rollout_sampling.criterium == "next_scale_autoreg": # autoregressive next-scale
+                    pred = self.encoder.next_scale_autoreg(
+                        tokenized_map, tokenized_agent, sampling_scheme=self.training_rollout_sampling
+                    )
+                else:
+                    pred = self.encoder.inference(
+                        tokenized_map, tokenized_agent, self.validation_rollout_sampling
+                    )
                 pred_traj.append(pred["pred_traj_10hz"])
                 pred_z.append(pred["pred_z_10hz"])
                 pred_head.append(pred["pred_head_10hz"])
@@ -258,9 +350,14 @@ class SMART(LightningModule):
         # ! only closed-loop vlidation
         pred_traj, pred_z, pred_head = [], [], []
         for _ in range(self.n_rollout_closed_val):
-            pred = self.encoder.inference(
-                tokenized_map, tokenized_agent, self.validation_rollout_sampling
+            if self.training_rollout_sampling.criterium == "next_scale_autoreg": # autoregressive next-scale
+                pred = self.encoder.next_scale_autoreg(
+                    tokenized_map, tokenized_agent, sampling_scheme=self.training_rollout_sampling
             )
+            else:
+                pred = self.encoder.inference(
+                    tokenized_map, tokenized_agent, self.validation_rollout_sampling
+                )
             pred_traj.append(pred["pred_traj_10hz"])
             pred_z.append(pred["pred_z_10hz"])
             pred_head.append(pred["pred_head_10hz"])
@@ -291,3 +388,9 @@ class SMART(LightningModule):
     def on_test_epoch_end(self):
         if self.global_rank == 0:
             self.wosac_submission.save_sub_file()
+            
+    def on_train_epoch_end(self):
+        scheduler = self.lr_schedulers()
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        print(f"Epoch {self.current_epoch}: LR = {current_lr}")

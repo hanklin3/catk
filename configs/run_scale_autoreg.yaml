@@ -9,15 +9,14 @@ defaults:
   - callbacks: default
   - logger: wandb
   - trainer: default
-  # - trainer: ddp
   - paths: default
   - hydra: default
 
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
-  - experiment: pre_bc
+  - experiment: next_scale_autoreg
 
-action: fit # fit, finetune, validate, test
+action: finetune # fit, finetune, validate, test
 
 # task name, determines output directory path
 task_name: "debug_open_source"

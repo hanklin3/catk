@@ -7,7 +7,9 @@ export HYDRA_FULL_ERROR=1
 export TF_CPP_MIN_LOG_LEVEL=2
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-
+# MY_EXPERIMENT="pre_bc"
+MY_EXPERIMENT="clsft"
+MY_TASK_NAME=$MY_EXPERIMENT"-test"
 
 # source ~/miniconda3/etc/profile.d/conda.sh
 # conda activate catk
@@ -32,23 +34,19 @@ ulimit -n 65536
 ulimit -n
 export COLUMNS=200 # increase hydra text length
 
-# MY_EXPERIMENT="pre_bc"
-MY_EXPERIMENT="clsft"
-MY_TASK_NAME=$MY_EXPERIMENT"-test"
-
 export MASTER_PORT=44144
 export MASTER_ADDR=127.0.0.1
 
-# while true
-# do
-#     PORT=$(( ((RANDOM<<15)|RANDOM) % 49152 + 10000 ))
-#     status="$(nc -z 127.0.0.1 $PORT < /dev/null &>/dev/null; echo $?)"
-#     if [ "${status}" != "0" ]; then
-#         break;
-#     fi
-# done
-# echo $PORT
-# export MASTER_PORT=$PORT
+while true
+do
+    PORT=$(( ((RANDOM<<15)|RANDOM) % 49152 + 10000 ))
+    status="$(nc -z 127.0.0.1 $PORT < /dev/null &>/dev/null; echo $?)"
+    if [ "${status}" != "0" ]; then
+        break;
+    fi
+done
+echo $PORT
+export MASTER_PORT=$PORT
 
 torchrun \
   -m \

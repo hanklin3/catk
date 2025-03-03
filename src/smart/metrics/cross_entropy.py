@@ -17,6 +17,7 @@ import torch
 from torch import Tensor, tensor
 from torch.nn.functional import cross_entropy
 from torchmetrics.metric import Metric
+from torch.nn import functional as F
 
 from .utils import get_euclidean_targets, get_prob_targets
 
@@ -41,6 +42,14 @@ class CrossEntropy(Metric):
         self.rollout_as_gt = rollout_as_gt
         self.add_state("loss_sum", default=tensor(0.0), dist_reduce_fx="sum")
         self.add_state("count", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("cross_entropy_loss", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("loss_commitment_dictionary", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("loss_vqvae", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("loss_var", default=tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("loss_angular_acc", default=tensor(0.0), dist_reduce_fx="sum")
+        
+        self.beta = 0.25                # commitment loss weight
+        self.angular_acc_weight = 10.0  # angular acceleration loss weight
 
     def update(
         self,
@@ -66,6 +75,16 @@ class CrossEntropy(Metric):
         train_mask: Optional[Tensor] = None,  # [n_agent]
         # ! for rollout_as_gt
         next_token_action: Optional[Tensor] = None,  # [n_agent, 16, 3]
+        # ! vqvae loss
+        loss_commitment_dictionary: Optional[Tensor] = None,  # [1]
+        f_hat_per_level: Optional[Tensor] = None,  # List[Tensor[n_agent, n_emb, 18, 2]]
+        n_points_per_level: Optional[Tensor] = None,  # List[int]
+        f_BCt2: Optional[Tensor] = None,  # [n_agent, n_emb, 18, 2] # encoder output
+        f_BCt2_reconstructed: Optional[Tensor] = None,  # [n_agent, n_emb, 18, 2] or [n_agent, 18, n_token=vocab_size] # decoder output
+        # ! var loss
+        var_loss: Optional[Tensor] = None,  # [1]
+        var_logits_BLV: Optional[Tensor] = None,  # [B, L, V]
+        var_gt_BL: Optional[Tensor] = None,  # [B, L]
         **kwargs,
     ) -> None:
         # ! use raw or tokenized GT
@@ -88,7 +107,7 @@ class CrossEntropy(Metric):
             gt_pos=gt_pos,
             gt_head=gt_head,
             gt_valid=gt_valid,
-        )
+        ) # hk: [n_agent, 16, 3] x,y,yaw, [n_agent, 16]
         if self.rollout_as_gt and (next_token_action is not None):
             euclidean_target = next_token_action
         # use contour to compute one-hot prob_target
@@ -99,7 +118,7 @@ class CrossEntropy(Metric):
         )  # [n_agent, n_step, n_token] prob, last dim sum up to 1
         # n_token = n_classes = token vocabulary size
         loss = cross_entropy(
-            next_token_logits.transpose(1, 2),  # [n_agent, n_token, n_step], logits
+            next_token_logits.transpose(1, 2),  # [n_agent, n_token, n_step], logits: [B, n_classes, dim1]
             prob_target.transpose(1, 2),  # [n_agent, n_token, n_step], prob
             reduction="none",
             label_smoothing=self.label_smoothing,
@@ -110,8 +129,73 @@ class CrossEntropy(Metric):
         if self.training:
             loss_weighting_mask &= train_mask.unsqueeze(1)  # [n_agent, n_step]
 
-        self.loss_sum += (loss * loss_weighting_mask).sum()
+        # self.loss_sum += (loss * loss_weighting_mask).sum()
         self.count += (loss_weighting_mask > 0).sum()
+        self.cross_entropy_loss += (loss * loss_weighting_mask).sum()
+  
+        assert ((loss_weighting_mask == 1) | (loss_weighting_mask == 0)).all(), loss_weighting_mask
+
+        # Commitment and dictionary loss
+        if loss_commitment_dictionary is not None:
+            self.loss_commitment_dictionary += loss_commitment_dictionary 
+        elif f_BCt2 is not None:
+            f_BCt2 = f_BCt2[:, :, 1:-1, :]  # [n_agent, n_emb, n_step=16, 2]
+            assert loss_weighting_mask.shape == (f_BCt2.shape[0], f_BCt2.shape[2]), (loss_weighting_mask.shape, f_BCt2.shape)
+            f_BCt2 = f_BCt2 * loss_weighting_mask[:, None, :, None].float()
+            f_no_grad = f_BCt2.detach()
+            assert not torch.isclose(f_hat_per_level[0], f_hat_per_level[1]).all()
+            for f_hat in f_hat_per_level:
+                f_hat = f_hat[:, :, 1:-1, :]  # [n_agent, n_emb, n_step=16, 2]
+                f_hat = f_hat * loss_weighting_mask[:, None, :, None].float()
+                # Commitment loss: make sure encoder output f_BChw  ze(x)  commits to the quantized embeddings (f_hat.data) (.data detach from graph), sg[e]. 
+                # Dictionary Loss: ensures the quantized embeddings f_hat accurately reconstruct the encoder output feature map f_no_grad sg[ze(x)]
+                self.loss_commitment_dictionary += F.mse_loss(f_hat.data, f_BCt2).mul_(self.beta) + F.mse_loss(f_hat, f_no_grad)
+            assert len(n_points_per_level) == len(f_hat_per_level), (len(n_points_per_level), len(f_hat_per_level))
+            # self.loss_commitment_dictionary *= 1. / len(n_points_per_level)
+        
+        # self.loss_sum += loss_commitment_dictionary # shape [1] <- [1]
+
+        if f_BCt2_reconstructed is not None:
+            _, _, W_dim = f_BCt2_reconstructed.shape
+            assert W_dim != 2
+            if W_dim == 2: # traj x,y
+                f_BCt2_reconstructed = f_BCt2_reconstructed[:, 1:-1, :]  # [n_agent, n_step=16, 2]
+                f_BCt2_reconstructed = f_BCt2_reconstructed * loss_weighting_mask[:, :, None].float()
+                loss_vqvae += F.mse_loss(f_BCt2_reconstructed, euclidean_target[:, :, 0:2])
+            else: # W_dim == n_token = 2048
+                # cross entropy loss
+                loss_vqvae = cross_entropy(
+                    f_BCt2_reconstructed[:, 1:-1, :].transpose(1, 2),  # [n_agent, n_token, n_step], logits: [B, class, dim1]
+                    prob_target.transpose(1, 2),  # [n_agent, n_token, n_step], prob
+                    reduction="none",
+                    label_smoothing=self.label_smoothing,
+                )  # [n_agent, n_step=16]
+                loss_vqvae = (loss_vqvae * loss_weighting_mask).sum()
+            self.loss_vqvae += loss_vqvae
+            # self.loss_sum += loss_vqvae
+
+        if var_loss is not None:
+            self.loss_var += var_loss
+            
+        # Calculate angular velocity and angular acceleration
+        angular_velocity = pred_head[:, 1:] - pred_head[:, :-1]  # [n_agent, 17]
+        angular_acceleration = angular_velocity[:, 1:] - angular_velocity[:, :-1]  # [n_agent, 16]
+
+        # Compute angular acceleration loss
+        self.loss_angular_acc += torch.mean(angular_acceleration ** 2)
+
+        # print('\n')
+        # print('self.loss_sum / self.count', self.loss_sum / self.count)
+        # print('self.loss_commitment_dictionary / self.count', self.loss_commitment_dictionary / self.count)
+        # print('self.cross_entropy_loss / self.count', self.cross_entropy_loss / self.count)
+        # print('self.loss_L2_traj / self.count', self.loss_L2_traj / self.count)
 
     def compute(self) -> Tensor:
-        return self.loss_sum / self.count
+        return {'loss': self.cross_entropy_loss / self.count + self.loss_commitment_dictionary + 
+                self.loss_vqvae / self.count + self.loss_var + self.angular_acc_weight * self.loss_angular_acc / self.count,
+            # 'loss': self.loss_sum / self.count,
+                'cross_entropy_loss': self.cross_entropy_loss / self.count, 
+                'loss_commitment_dictionary': self.loss_commitment_dictionary, 
+                'loss_vqvae': self.loss_vqvae / self.count,
+                'loss_var': self.loss_var,
+                'loss_angular_acc': self.loss_angular_acc / self.count * self.angular_acc_weight}

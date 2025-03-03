@@ -43,6 +43,11 @@ model_config:
     time_span: 30
     num_historical_steps: 11
     num_future_steps: 80
+    n_points_per_level: [1, 2, 3, 5, 9, 16, 18]
+    build_vqvae: false
+    build_var: false
+    n_vq_emb: 32  # vqvae quantized vector emb size
+    vq_vocab_size: 4096 # vqvae quantized vector latent vocab size
   wosac_submission:
     is_active: false
     method_name: "SMART-tiny-CLSFT"
@@ -57,4 +62,3 @@ model_config:
     label_smoothing: 0.1
     rollout_as_gt: false
   finetune: false
-  anchor_residual: true
