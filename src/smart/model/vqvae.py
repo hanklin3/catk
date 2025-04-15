@@ -26,7 +26,8 @@ class VQVAE(nn.Module):
         v_patch_nums=[1, 2, 3, 5, 9, 16, 18], # number of patches for each scale, h_{1 to K} = w_{1 to K} = v_patch_nums[k]
         test_mode=False,
         coder_in_channels=3,    # encoder decoder input channel
-        coder_ch_mult=(1, 1, 2, 2, 4)  # encoder decoder channel multiplier
+        coder_ch_mult=(1, 1, 2, 2, 4),  # encoder decoder channel multiplier
+        W=1,   # width of the next-scale image
     ):
         super().__init__()
         self.test_mode = test_mode
@@ -47,6 +48,7 @@ class VQVAE(nn.Module):
         self.quantize: VectorQuantizer2 = VectorQuantizer2(
             vocab_size=vocab_size, Cvae=self.Cvae, using_znorm=using_znorm, beta=beta,
             default_qresi_counts=default_qresi_counts, v_patch_nums=v_patch_nums, quant_resi=quant_resi, share_quant_resi=share_quant_resi,
+            W=W,
         )
         self.quant_conv = torch.nn.Conv2d(self.Cvae, self.Cvae, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
         self.post_quant_conv = torch.nn.Conv2d(self.Cvae, self.Cvae, quant_conv_ks, stride=1, padding=quant_conv_ks//2)

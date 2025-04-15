@@ -46,7 +46,8 @@ class VAR(nn.Module):
         # self.L = sum(pn ** 2 for pn in self.patch_nums)  
         # self.first_l = self.patch_nums[0] ** 2 # Number of tokens at the first scale
         self.L = sum(ph * pw for (ph, pw) in self.patch_nums) # Total length of the sequence for all scales
-        assert self.L == 54, f"self.L {self.L} != 54"
+        # if patch_nums[0][1] == 1:
+        #     assert self.L == 54, f"self.L {self.L} != 54"
         self.first_l = self.patch_nums[0][0] * self.patch_nums[0][1] # Number of tokens at the first scale
         self.begin_ends = []
         cur = 0

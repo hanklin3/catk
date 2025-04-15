@@ -1,0 +1,25 @@
+model:
+  batch_size: 4
+  lr: 8.0e-05
+  # name: 04_classify_2
+  # name: 09_traj_scheduler
+  name: 08_traj_repeat
+  # name: 09_traj_repeat
+  traj_per_epoch: 10000
+  n_vq_emb: 32
+  vqvae_ch: 160
+  vq_vocab_size: 4096
+  # n_token_agent: 108 # 11664,
+  n_token_agent: 11664
+  # v_patch_nums: [1, 2, 3, 5, 8]
+  v_patch_nums: [1, 2, 3, 5, 9, 16, 18]
+  #n_points_per_level: [(1, 2), (2, 2), (3, 2), (5, 2), (8, 2)],
+  var_precision: bfloat16
+  target_traj: traj
+  # target_traj: map
+  # target_traj: map_traj
+  scheduler_step: 4000
+
+trainer:
+  epochs: 5000
+  resume_path: null

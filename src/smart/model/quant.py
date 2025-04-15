@@ -24,6 +24,12 @@ class VectorQuantizer2(nn.Module):
         self.Cvae: int = Cvae
         self.using_znorm: bool = using_znorm
         self.v_patch_nums: Tuple[int] = v_patch_nums
+         
+        self.patch_hws = [(pn, W) if isinstance(pn, int) else (pn[0], pn[1]) for pn in (self.v_patch_nums)]    # from small to large
+        H = self.v_patch_nums[-1]
+        if W != -1: 
+            assert self.patch_hws[-1][0] == H and self.patch_hws[-1][1] == W, f'{self.patch_hws[-1]=} != ({H=}, {W=})'
+        print('VectorQuantizer2.init self.patch_hws:', self.patch_hws)
         
         self.quant_resi_ratio = quant_resi
         if share_quant_resi == 0:   # non-shared: \phi_{1 to K} for K scales
@@ -42,7 +48,7 @@ class VectorQuantizer2(nn.Module):
         # only used for progressive training of VAR (not supported yet, will be tested and supported in the future)
         self.prog_si = -1   # progressive training: not supported yet, prog_si always -1
 
-        self.W = 1
+        self.W = W
     
     def eini(self, eini):
         if eini > 0: nn.init.trunc_normal_(self.embedding.weight.data, std=eini)
@@ -123,25 +129,27 @@ class VectorQuantizer2(nn.Module):
         dtype = f_BCt2.dtype
         if dtype != torch.float32: f_BCt2 = f_BCt2.float()
         B, C, H, W = f_BCt2.shape # [n_agent, n_emb, n_step, 2], n_step=18. or [n_agent, n_token, n_step, 1]
-        assert H == 18, "n_step should be 18"
+        # assert H == 18, "n_step should be 18"
         f_no_grad = f_BCt2.detach()
         
         f_rest = f_no_grad.clone() # f_rest is the residual feature map, which starts as the full feature map f produced by the encoder.
         f_hat = torch.zeros_like(f_rest)
         f_hat_per_level = []
         # idx_Bhw_list = []
+        # print('f_rest.shape:', f_rest.shape)
 
         with torch.cuda.amp.autocast(enabled=False):
             mean_vq_loss: torch.Tensor = 0.0
             vocab_hist_V = torch.zeros(self.vocab_size, dtype=torch.float, device=f_BCt2.device)
-            SN = len(self.v_patch_nums)
-            for si, pn in enumerate(self.v_patch_nums): # from small to large
+
+            SN = len(self.patch_hws)
+            for si, (ph, pw) in enumerate(self.patch_hws): # from small to large
                 # find the nearest embedding
                 # print('processing scale:', si, 'with n_points_per_level:', pn)
                 if self.using_znorm: # using_znorm=True (cosine similarity)  
                     # Interpolate spatial and temporal dimensions are interpolated to the target number of points pn.
                     f_B2tC_upsampled = F.interpolate(
-                        f_rest, size=(pn, W), mode='bicubic', align_corners=True
+                        f_rest, size=(ph, pw), mode='bicubic', align_corners=True
                     ).permute(0, 2, 3, 1).reshape(-1, C)  if (si != SN-1) else f_BCt2.permute(0, 2, 3, 1).reshape(-1, C) 
                     # interpolate: [n_agents, n_embedding, n_upsampled_steps, 2] --> permute/reshape: [n_agents * 2* n_upsampled_steps, n_embedding]
                     f_B2tC_upsampled = F.normalize(f_B2tC_upsampled, dim=-1)  # Normalizes the feature map points f_B2tC_upsampled along the embedding dimension n_embedding (L2 norm).
@@ -151,7 +159,7 @@ class VectorQuantizer2(nn.Module):
                 else: # self.using_znorm=False (Euclidean distance).
                     # Interpolate spatial and temporal dimensions are interpolated to the target number of points pn.
                     f_B2tC_upsampled = F.interpolate(
-                        f_rest, size=(pn, W), mode='bicubic', align_corners=True
+                        f_rest, size=(ph, pw), mode='bicubic', align_corners=True
                     ).permute(0, 2, 3, 1).reshape(-1, C)  if (si != SN-1) else f_BCt2.permute(0, 2, 3, 1).reshape(-1, C)
                     # interpolate: [n_agents, n_embedding, n_upsampled_steps, 2] --> permute/reshape: [n_agents * 2* n_upsampled_steps, n_embedding]
                     # ||x - e_k||^2 = ||x||^2 + ||e_k||^2 - 2 * x * e_k
@@ -169,7 +177,8 @@ class VectorQuantizer2(nn.Module):
                 #     if dist.initialized(): handler = tdist.all_reduce(hist_V, async_op=True)
                 
                 # calc loss
-                idx_Bhw = idx_N.view(B, pn, W) # (B*h*w) -> (B, h, w)
+                # print('ph:', ph, 'pw:', pw, 'idx_N.shape:', idx_N.shape)
+                idx_Bhw = idx_N.view(B, ph, pw) # (B*h*w) -> (B, h, w)
                 # idx_Bhw_list.append(idx_Bhw)
                 # h_BCt2: idx_Bhw(B, h, w) -> embedding -> (B,pn,2,n_emb) --> permute (B, n_emb, pn, 2) --> interpolate to HW (B, C, H=18, W=2)
                 h_BCt2 = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else \
@@ -218,8 +227,7 @@ class VectorQuantizer2(nn.Module):
         ls_f_hat_BChw = []
         B = ms_h_BChw[0].shape[0]
         # H = W = self.v_patch_nums[-1]
-        H = self.v_patch_nums[-1]
-        W = self.W
+        H, W = self.patch_hws[-1]
         SN = len(self.v_patch_nums)
         if all_to_max_scale:
             f_hat = ms_h_BChw[0].new_zeros(B, self.Cvae, H, W, dtype=torch.float32)
@@ -265,8 +273,8 @@ class VectorQuantizer2(nn.Module):
         patch_hws = [(pn, pn) if isinstance(pn, int) else (pn[0], pn[1]) for pn in (v_patch_nums or self.v_patch_nums)]    # from small to large
         assert patch_hws[-1][0] == H and patch_hws[-1][1] == W, f'{patch_hws[-1]=} != ({H=}, {W=})'
         
-        SN = len(patch_hws)
-        for si, (ph, pw) in enumerate(patch_hws): # from small to large
+        SN = len(self.patch_hws)
+        for si, (ph, pw) in enumerate(self.patch_hws): # from small to large
             if 0 <= self.prog_si < si: break    # progressive training: not supported yet, prog_si always -1
             # find the nearest embedding
             z_NC = F.interpolate(f_rest, size=(ph, pw), mode='area').permute(0, 2, 3, 1).reshape(-1, C) if (si != SN-1) else f_rest.permute(0, 2, 3, 1).reshape(-1, C)
@@ -283,6 +291,7 @@ class VectorQuantizer2(nn.Module):
             h_BChw = self.quant_resi[si/(SN-1)](h_BChw) # Refinement network
             f_hat.add_(h_BChw)
             f_rest.sub_(h_BChw)
+            # print('B, ph, pw:', B, ph, pw)
             f_hat_or_idx_Bl.append(f_hat.clone() if to_fhat else idx_N.reshape(B, ph*pw)) # (B, ph*pw)
         
         return f_hat_or_idx_Bl
@@ -290,36 +299,63 @@ class VectorQuantizer2(nn.Module):
     # ===================== idxBl_to_var_input: only used in VAR training, for getting teacher-forcing input =====================
     def idxBl_to_var_input(self, gt_ms_idx_Bl: List[torch.Tensor]) -> torch.Tensor:
         """
+        gt_ms_idx_Bl[0]: [B, L]
         return BLC: [B, L, C], where L = sum([ph*pw for ph, pw in self.v_patch_nums]), C = self.Cvae
         """
         next_scales = []
-        B = gt_ms_idx_Bl[0].shape[0]
-        C = self.Cvae
+        B = gt_ms_idx_Bl[0].shape[0] 
+        C = self.Cvae # n_emb
         # H = W = self.v_patch_nums[-1]
-        H = self.v_patch_nums[-1]
-        W = self.W
+            
+        H, W = self.patch_hws[-1]
         SN = len(self.v_patch_nums)
+        # print('B, C H W:', B, C, H, W)
         
         f_hat = gt_ms_idx_Bl[0].new_zeros(B, C, H, W, dtype=torch.float32)
         pn_next: int = self.v_patch_nums[0]
+        pn_nextH, pn_nextW = self.patch_hws[0]
         for si in range(SN-1):
+            
             if self.prog_si == 0 or (0 <= self.prog_si-1 < si): break   # progressive training: not supported yet, prog_si always -1
             # h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, pn_next), size=(H, W), mode='bicubic')
-            h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, W), size=(H, W), mode='bicubic')
-            f_hat.add_(self.quant_resi[si/(SN-1)](h_BChw)) # upscale the embeddings to the full size (H, W) of the feature map, run through conv layers
-            pn_next = self.v_patch_nums[si+1] # Update pn_next to the next scale’s resolution.
+            # h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, W), size=(H, W), mode='bicubic')
+            h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_nextH, pn_nextW), size=(H, W), mode='bicubic')
+            
+            # same as this block         
+            # h_BCt2: idx_Bhw(B, h, w) -> embedding -> (B,pn,2,n_emb) --> permute (B, n_emb, pn, 2) --> interpolate to HW (B, C, H=18, W=2)
+            # print('gt_ms_idx_Bl[si]', gt_ms_idx_Bl[si].shape)
+            # idx_Bhw = gt_ms_idx_Bl[si].view(B, pn_next, W) # (B*h*w) -> (B, h, w)
+            # h_BCt2 = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else \
+            #     self.embedding(idx_Bhw).permute(0, 3, 1, 2).contiguous()
+            # h_BChw = h_BCt2
+            # h_BCt2 = self.quant_resi[si/(SN-1)](h_BCt2)  # A refinement step is applied to the quantized embeddings h_BCt2 for the current scale.
+            # [B, n_emb, 18, 2]  # Hierarchical refinement: weights are shared across scales, weight-sum of raw quantized embeddings and the refinement.
+        
+            # in-place operation, no gradient
+            # f_hat.add_(self.quant_resi[si/(SN-1)](h_BChw)) # upscale the embeddings to the full size (H, W) of the feature map, run through conv layers
+            
+            # Allow gradient
+            h_BChw = self.quant_resi[si/(SN-1)](h_BChw)  # A refinement step is applied to the quantized embeddings h_BCt2 for the current scale.
+            # [B, n_emb, 18, 2]  # Hierarchical refinement: weights are shared across scales, weight-sum of raw quantized embeddings and the refinement.
+            f_hat = f_hat + h_BChw # Accumulates the reconstructed feature map from quantized embeddings, approximate feature map f_BChw. shape (B, C, H, W), [n_agent, n_emb, 18, 2]
+  
+            
+            # pn_next = self.v_patch_nums[si+1] # Update pn_next to the next scale’s resolution.
+            pn_nextH, pn_nextW = self.patch_hws[si+1]
             # next_scales.append(F.interpolate(f_hat, size=(pn_next, pn_next), mode='area').view(B, C, -1).transpose(1, 2))
-            next_scales.append(F.interpolate(f_hat, size=(pn_next, W), mode='area').view(B, C, -1).transpose(1, 2))
+            # next_scales.append(F.interpolate(f_hat, size=(pn_next, W), mode='area').view(B, C, -1).transpose(1, 2))
+            next_scales.append(F.interpolate(f_hat, size=(pn_nextH, pn_nextW), mode='area').view(B, C, -1).transpose(1, 2))
         return torch.cat(next_scales, dim=1) if len(next_scales) else None    # cat BlCs to BLC, this should be float32
     
     # ===================== get_next_autoregressive_input: only used in VAR inference, for getting next step's input =====================
     def get_next_autoregressive_input(self, si: int, SN: int, f_hat: torch.Tensor, h_BChw: torch.Tensor) -> Tuple[Optional[torch.Tensor], torch.Tensor]: # only used in VAR inference
-        HW = self.v_patch_nums[-1]
+        # HW = W = self.v_patch_nums[-1]
+        HW, W = self.patch_hws[-1]
         if si != SN-1:
-            h = self.quant_resi[si/(SN-1)](F.interpolate(h_BChw, size=(HW, self.W), mode='bicubic'))     # conv after upsample
+            h = self.quant_resi[si/(SN-1)](F.interpolate(h_BChw, size=(HW, W), mode='bicubic'))     # conv after upsample
             f_hat.add_(h)
             # return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si+1], self.v_patch_nums[si+1]), mode='area')
-            return f_hat, F.interpolate(f_hat, size=(self.v_patch_nums[si+1], self.W), mode='area')
+            return f_hat, F.interpolate(f_hat, size=(self.patch_hws[si+1][0], self.patch_hws[si+1][1]), mode='area')
         else:
             h = self.quant_resi[si/(SN-1)](h_BChw)
             f_hat.add_(h)
