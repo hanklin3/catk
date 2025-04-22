@@ -302,6 +302,8 @@ class VectorQuantizer2(nn.Module):
         gt_ms_idx_Bl[0]: [B, L]
         return BLC: [B, L, C], where L = sum([ph*pw for ph, pw in self.v_patch_nums]), C = self.Cvae
         """
+        # print('idxBl_to_var_input gt_ms_idx_Bl:', gt_ms_idx_Bl[0].shape, gt_ms_idx_Bl[-1].shape)
+        
         next_scales = []
         B = gt_ms_idx_Bl[0].shape[0] 
         C = self.Cvae # n_emb

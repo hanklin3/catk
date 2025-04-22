@@ -301,7 +301,7 @@ class VAR(nn.Module):
 
         :param label_B: label_B
         :param x_BLCv_wo_first_l: teacher forcing input (B, self.L-self.first_l, self.Cvae)
-        :return: logits BLV, B: batch, L: Sequence length n_tokens, V is vocab_size
+        :return: logits BLC, B: batch, L: Sequence length n_tokens, C=vocab_size? [4, 108, 4096]
         """
 
         bg, ed = self.begin_ends[self.prog_si] if self.prog_si >= 0 else (0, self.L)
@@ -314,6 +314,7 @@ class VAR(nn.Module):
             if self.prog_si == 0: x_BLC = sos
             else: x_BLC = torch.cat((sos, self.word_embed(x_BLCv_wo_first_l.float())), dim=1) # class Combine with position embeddings
             x_BLC += self.lvl_embed(self.lvl_1L[:, :ed].expand(B, -1)) + self.pos_1LC[:, :ed] # lvl: BLC;  pos_1LC: [1LC] add emb up to end level ed
+        # print('x_BLC', x_BLC.shape) [4, 108, 1024]
         
         attn_bias = self.attn_bias_for_masking[:, :, :ed, :ed]
         cond_BD_or_gss = self.shared_ada_lin(cond_BD) # cond_BD [B, D]: The conditioning embeddings derived from class labels (default behavior).
@@ -335,6 +336,7 @@ class VAR(nn.Module):
             assert not torch.isnan(x_BLC).any(), x_BLC
         x_BLC = self.get_logits(x_BLC.float(), cond_BD) # Predict next token logits
         assert not torch.isnan(x_BLC).any(), x_BLC
+        # print('after AdaLNSelfAttn x_BLC', x_BLC.shape) # torch.Size([4, 108, 4096])
         
         if self.prog_si == 0:
             if isinstance(self.word_embed, nn.Linear):
@@ -346,6 +348,7 @@ class VAR(nn.Module):
                         s += p.view(-1)[0] * 0
                 x_BLC[0, 0, 0] += s
                 print('s', s)
+        # print('return x_BLC', x_BLC.shape) # torch.Size([4, 108, 4096])
         return x_BLC    # logits BLV, V is vocab_size
     
     def init_weights(self, init_adaln=0.5, init_adaln_gamma=1e-5, init_head=0.02, init_std=0.02, conv_std_or_gain=0.02):

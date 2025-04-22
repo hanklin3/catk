@@ -34,7 +34,7 @@ class VQVAE(nn.Module):
         self.V, self.Cvae = vocab_size, z_channels
         # ddconfig is copied from https://github.com/CompVis/latent-diffusion/blob/e66308c7f2e64cb581c6d27ab6fbeb846828253b/models/first_stage_models/vq-f16/config.yaml
         ddconfig = dict(
-            dropout=dropout, ch=ch, z_channels=z_channels,
+            dropout=dropout, ch=ch, z_channels=z_channels,  # ch is encoder internal channels, z_channels is the output channels
             in_channels=coder_in_channels, ch_mult=coder_ch_mult, num_res_blocks=2,   # from vq-f16/config.yaml above
             using_sa=True, using_mid_sa=True,                           # from vq-f16/config.yaml above
             # resamp_with_conv=True,   # always True, removed.

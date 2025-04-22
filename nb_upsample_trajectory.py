@@ -213,9 +213,10 @@ import matplotlib.pyplot as plt
 
 # Example parameters
 n_agents = 1
-n_embedding = 1
+n_embedding = 10
 n_steps = 5
 n_upsampled_steps = 7
+batch_size = 3
 
 # Generate example trajectory [n_agents, n_embedding, 2 (x, y), n_steps]
 trajectory = torch.tensor([[
@@ -275,6 +276,7 @@ n_agents = 1
 n_embedding = 1
 n_steps = 5
 n_upsampled_steps = 7
+batch_size = 3
 
 # Generate example trajectory [n_agents, n_embedding, 2 (x, y), n_steps]
 trajectory = torch.tensor([[
