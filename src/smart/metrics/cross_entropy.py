@@ -34,6 +34,8 @@ class CrossEntropy(Metric):
         gt_thresh_scale_length: float,  # {"veh": 4.8, "cyc": 2.0, "ped": 1.0}
         label_smoothing: float,
         rollout_as_gt: bool,
+        angular_acc_weight: float=0.0, # angular acceleration loss weight
+        beta: float=0.25, # commitment loss weight
     ) -> None:
         super().__init__()
         self.use_gt_raw = use_gt_raw
@@ -48,8 +50,9 @@ class CrossEntropy(Metric):
         self.add_state("loss_var", default=tensor(0.0), dist_reduce_fx="sum")
         self.add_state("loss_angular_acc", default=tensor(0.0), dist_reduce_fx="sum")
         
-        self.beta = 0.25                # commitment loss weight
-        self.angular_acc_weight = 10.0  # angular acceleration loss weight
+        self.beta = beta                              # commitment loss weight
+        self.angular_acc_weight = angular_acc_weight  # angular acceleration loss weight
+        print('CrossEntropy: beta: ', beta, "angular_acc_weight: ", angular_acc_weight)
 
     def update(
         self,
