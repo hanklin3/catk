@@ -4,6 +4,8 @@ import json
 from src.smart.minigrid.maze_loader import MazeTrajectoryDataset
 from src.smart.model.vqvae import VQVAE
 from src.smart.model.var import VAR
+from src.smart.model.basic_vae import Decoder, Encoder
+from src.smart.layers import MLPLayer
 import torch.nn.functional as F
 import torch.nn as nn
 import os
@@ -42,7 +44,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else "cpu")
 class MazeVQVAEVARTrainer(nn.Module):
     def __init__(self, n_vq_emb=32, # vqvae quantized vector emb size
                  vq_vocab_size= 4096, # vqvae quantized vector latent vocab size
-                 vqvae_ch=160, traj_per_epoch=10000, batch_size=4, n_token_agent=108, #n_token_agent=11664, 
+                 vqvae_ch=128, traj_per_epoch=10000, batch_size=4, n_token_agent=108, #n_token_agent=11664, 
                 #  v_patch_nums=[1, 2, 3, 5, 9, 16, 18],
                  v_patch_nums=[1, 2, 3, 5, 8],
                  var_precision: str = "bfloat16", # float16 or bfloat16 or None
@@ -52,14 +54,16 @@ class MazeVQVAEVARTrainer(nn.Module):
                  target_traj=True,
                  lr= 8e-5,
                  scheduler_step=1000,
+                 vae_encoder_in_ch=1,
                  ):
         super(MazeVQVAEVARTrainer, self).__init__()
                 
-        self.vqvae_ch = vqvae_ch
+        self.vqvae_ch = vqvae_ch # vae encoder intermediate channels, grows by coder_ch_mult
         self.v_patch_nums = v_patch_nums
         self.target_traj = target_traj
         # make n_points_per_level into [(i, per_point_dim) for i in n_points_per_level]
-        if self.target_traj == 'traj':
+        self.vae_encoder_in_ch = vae_encoder_in_ch
+        if self.target_traj == 'traj' or self.target_traj == 'map2traj':
             self.n_points_per_level = [(i, per_point_dim) for i in v_patch_nums]
         elif self.target_traj == 'map':
             self.n_points_per_level = [(i, i) for i in v_patch_nums]
@@ -68,7 +72,7 @@ class MazeVQVAEVARTrainer(nn.Module):
         print('n_points_per_level:', self.n_points_per_level)
         
         self.vq_vocab_size = vq_vocab_size
-        self.n_vq_emb = n_vq_emb
+        self.n_vq_emb = n_vq_emb # encoder z_channels (output), decoder z_channels (input)
         self.n_token_agent = n_token_agent
         self.device = device
         lr = lr
@@ -94,13 +98,7 @@ class MazeVQVAEVARTrainer(nn.Module):
         build_var = True
         
         self.vae = self.quantize = None
-        if build_vqvae:
-            self.use_xy_as_output = True
-            if self.use_xy_as_output:
-                in_out_emb_channels = 1
-            else:
-                in_out_emb_channels = n_token_agent
-            
+        if build_vqvae:            
             using_znorm = True # True cosine similarity
             # self.quantize: VectorQuantizer2 = VectorQuantizer2(
             #     vq_vocab_size=self.vq_vocab_size, Cvae=self.n_vq_emb, using_znorm=using_znorm, beta=self.beta,
@@ -111,10 +109,29 @@ class MazeVQVAEVARTrainer(nn.Module):
             share_quant_resi=4     # use 4 \phi layers for K scales: partially-shared \phi
             self.vae = VQVAE(vocab_size=self.vq_vocab_size, z_channels=self.n_vq_emb, ch=self.vqvae_ch, test_mode=False, 
                             share_quant_resi=share_quant_resi, v_patch_nums=self.n_points_per_level, #v_patch_nums=v_patch_nums,
-                            using_znorm=using_znorm, coder_in_channels=in_out_emb_channels,
+                            using_znorm=using_znorm, coder_in_channels=self.vae_encoder_in_ch,
                             coder_ch_mult=(1, 1, 2, 2, 4), W=-1, #W=per_point_dim
                             ) #.half()
             self.quantize = self.vae.quantize
+            
+        ddconfig = dict(
+            dropout=0.0, z_channels=self.n_vq_emb, ch=self.vqvae_ch,  # ch is encoder internal channels, z_channels is the output channels
+            in_channels=self.vae_encoder_in_ch,
+            ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2,   # from vq-f16/config.yaml above
+            using_sa=True, using_mid_sa=True,                           # from vq-f16/config.yaml above
+            # resamp_with_conv=True,   # always True, removed.
+        )
+        ddconfig.pop('double_z', None)  # only KL-VAE should use double_z=True
+        self.encoder = Encoder(double_z=False, **ddconfig)
+        self.decoder = Decoder(**ddconfig)
+        
+        self.token_predict_head = MLPLayer(
+            input_dim=n_vq_emb*8*8, hidden_dim=self.n_vq_emb, 
+            output_dim=self.n_points_per_level[-1][0]*self.n_points_per_level[-1][1], # 2D point
+        )
+        self.encoder.to(self.device)
+        self.decoder.to(self.device)
+        self.token_predict_head.to(self.device)
 
         self.apply(weight_init)
 
@@ -147,8 +164,6 @@ class MazeVQVAEVARTrainer(nn.Module):
                                           dtype=torch.float16 if var_precision == "float16" else torch.bfloat16, 
                                           cache_enabled=True)
             
-            
-
         self.ckpt_dir = ckpt_dir
         
         self.vae.to(self.device)
@@ -156,9 +171,16 @@ class MazeVQVAEVARTrainer(nn.Module):
         self.optimizer = torch.optim.Adam(list(self.vae.parameters()) + list(self.var_wo_ddp.parameters()), lr=lr)
         self.scheduler = StepLR(self.optimizer, step_size=scheduler_step, gamma=0.1)
         
+        # self.conv_in = torch.nn.Conv2d(1, self.vae_encoder_in_ch, kernel_size=3, stride=1, padding=1)
+        # self.conv_middle = torch.nn.Conv2d(self.vae_encoder_in_ch, self.vae_encoder_in_ch, kernel_size=3, stride=1, padding=1)
+        # self.conv_out = torch.nn.Conv2d(self.vae_encoder_in_ch, self.vae_encoder_in_ch, kernel_size=3, stride=1, padding=1)
+        
+
+        
+        
     def get_label(self, maze, start, goal):
         grid_H, grid_W = maze.shape[-2:]      # Height and width of the maze grid
-        if self.target_traj == 'traj':
+        if self.target_traj == 'traj' or self.target_traj == 'map2traj':
             label_B = (start[:, 0] * grid_W + start[:, 1]) * (grid_H * grid_W) + (goal[:, 0] * grid_W + goal[:, 1])
         elif self.target_traj == 'map':
             label_B = (goal[:, 0] * grid_W + goal[:, 1])
@@ -184,17 +206,30 @@ class MazeVQVAEVARTrainer(nn.Module):
             maze_img = batch["maze"].unsqueeze(1).float().to(self.device)  # [B, 1, H, W]
                       
             traj_BCT2 = batch["trajectory"].to(self.device)  # [B, T, 2]
-            traj_BCT2 = traj_BCT2.unsqueeze(1) # [B, 1, T, 2]
+            traj_BCT2 = traj_BCT2.unsqueeze(1) # [B, Cvae=1, T, 2]
+            
+            
+            # Increase the embedding Cvae dimension using new convolution network
+            
             
             if self.target_traj == 'traj':
+                f_BCt2_in = traj_BCT2
                 f_BCt2 = traj_BCT2
             elif self.target_traj == 'map':
+                f_BCt2_in = maze_img
                 f_BCt2 = maze_img
+            elif self.target_traj == 'map2traj':
+                f_BCt2_in = self.encoder(maze_img) # [B, Cvae, 8, 8]
+                f_BCt2_in = f_BCt2_in.reshape(f_BCt2_in.shape[0], -1)  # [B, Cvae*8*8]
+                f_BCt2_in = self.token_predict_head(f_BCt2_in)  # [B, Cvae=1*T*2]
+                f_BCt2_in = f_BCt2_in.reshape(f_BCt2_in.shape[0], 1, -1, 2)  # [B, Cvae=1, T, 2]
+                f_BCt2 = traj_BCT2
+                # print('map2traj f_BCt2:', f_BCt2.shape)
             else:
                 raise ValueError("target_traj must be 'traj' or 'map'")
 
             # VQVAE forward
-            result = self.vae(f_BCt2)
+            result = self.vae(f_BCt2_in)
             recon = result["f_BCt2_reconstructed"]  # [B, C, T, 2]
 
             mse_loss = F.mse_loss(recon, f_BCt2, reduction="mean")
@@ -202,9 +237,11 @@ class MazeVQVAEVARTrainer(nn.Module):
 
             # VAR forward
             gt_idx_Bl: List[torch.LongTensor] = self.vae.img_to_idxBl(
-                f_BCt2, v_patch_nums=self.var_wo_ddp.patch_nums) # List[B, patch_h*patch_w] codebook indices, multi-scale tokens R
-            # print('gt_idx_Bl: size', len(gt_idx_Bl), 'patch', gt_idx_Bl[0].shape)
-            gt_BL = torch.cat(gt_idx_Bl, dim=1)  # (B, L), ground truth quantized indices for the input image batch
+                f_BCt2, v_patch_nums=self.var_wo_ddp.patch_nums) # List[B, L=patch_h*patch_w] codebook indices, List len=R multi-scale tokens=len(v_patch_nums)
+            print('gt_idx_Bl: size', len(gt_idx_Bl), 'patch', gt_idx_Bl[0].shape)
+            gt_BL: torch.Tensor = torch.cat(gt_idx_Bl, dim=1)  # (B, L=sum(patch_h*patch_w)), ground truth quantized indices for the input image batch.
+            # gt_idx_Bl: size 7 patch torch.Size([4, 2])
+            # gt_BL:  torch.Size([4, 108]) sum([2, 4, 6, 10, 18, 32, 36]) = 108
             x_BLCv_wo_first_l: torch.Tensor = self.vae.quantize.idxBl_to_var_input(gt_idx_Bl) # (B, L, Cv), quantized indices to var input
             
             prog_si=-1
@@ -224,9 +261,10 @@ class MazeVQVAEVARTrainer(nn.Module):
             with torch.autocast('cuda', enabled=True): #, dtype=torch.float16):
                 # with self.amp_ctx:
                 self.var_wo_ddp.forward # 2. Train transformer to predict tokens
-                logits_BLV = self.var_wo_ddp(label_B, x_BLCv_wo_first_l) # (B, L, V), logits for the input image batch, V is the vocab size
+                logits_BLV = self.var_wo_ddp(label_B, x_BLCv_wo_first_l) # (B, L, V), logits for the input image batch, logits_BLV:  torch.Size([4, 108, V=4096=vocab_size])
                 assert not torch.isnan(logits_BLV).any(), logits_BLV
-                loss = self.train_loss(logits_BLV.view(-1, V), gt_BL.view(-1)).view(B, -1) # (B, L). logits shape is (B, L, V), gt shape is (B, L)
+                print('logits_BLV: ', logits_BLV.shape, 'gt_BL: ', gt_BL.shape) # logits_BLV:  torch.Size([4, 108, 4096]) gt_BL:  torch.Size([4, 108])
+                loss = self.train_loss((logits_BLV).view(-1, V), gt_BL.view(-1)).view(B, -1) # (B, L). logits shape is (B, L, V), gt shape is (B, L)
                 if prog_si >= 0:    # in progressive training - start with coarse scales
                     bg, ed = self.vae.begin_ends[prog_si]
                     assert logits_BLV.shape[1] == gt_BL.shape[1] == ed
@@ -236,7 +274,6 @@ class MazeVQVAEVARTrainer(nn.Module):
                     lw = self.loss_weight
                 var_loss = loss.mul(lw).sum(dim=-1).mean()
             
-
             total_loss = mse_loss + vq_loss + var_loss
             self.optimizer.zero_grad()
             total_loss.backward()
@@ -272,7 +309,7 @@ class MazeVQVAEVARTrainer(nn.Module):
             return
         plt.figure()
         plt.imshow(maze_np.T, origin='lower', cmap='gray_r')
-        if self.target_traj == 'traj':
+        if self.target_traj == 'traj' or self.target_traj == 'map2traj':
             plt.plot(traj_np[:, 0], traj_np[:, 1], marker='o', color='blue', label='Generated')
         plt.plot(groundtruth_traj[:, 0], groundtruth_traj[:, 1], marker='o', color='red', label='Ground Truth')
         if start is not None:
@@ -287,16 +324,18 @@ class MazeVQVAEVARTrainer(nn.Module):
         print("Saved generated trajectory plot to", path)
         plt.close()
         
-    def test_inference(self, num_samples=5, ckpt_filename=""):
+    def test_inference(self, num_samples=1, ckpt_filename=""):
         for i, batch in enumerate(self.dataloader):
-            if i >= num_samples:
+            if i > num_samples:
                 break
-            maze = batch["maze"]#[0].to(self.device)
-            start = batch["start"]#[0].tolist()
-            goal = batch["goal"]#[0].tolist()
+            maze = batch["maze"]#[0]#.to(self.device)
+            start = batch["start"]#[0]#.tolist()
+            goal = batch["goal"]#[0]#.tolist()
             groundtruth_traj = batch["trajectory"].cpu().numpy()
-            print('maze:', maze.shape, 'start:', start, 'goal:', goal)
             label_B = self.get_label(maze, start, goal)  # [B]
+            maze, start, goal, label_B = maze[0], start[0], goal[0], label_B[0]
+            groundtruth_traj = groundtruth_traj[0]
+            print('maze:', maze.shape, 'start:', start, 'goal:', goal)
             print('test label_B:', label_B)
             
             with torch.no_grad():
@@ -312,14 +351,14 @@ class MazeVQVAEVARTrainer(nn.Module):
                 print(traj_np.shape)
                 maze_np = maze.cpu().numpy() if torch.is_tensor(maze) else maze
             
-            if self.target_traj == 'traj':
-                self.generate_and_plot(traj_np, maze_np[0], start[0], goal[0], label_B[0], 
-                                       groundtruth_traj[0], title='VAR Generated Trajectory_' + ckpt_filename)   
+            if self.target_traj == 'traj' or self.target_traj == 'map2traj':
+                self.generate_and_plot(traj_np, maze_np, start, goal, label_B, 
+                                       groundtruth_traj, title='VAR Generated Trajectory_' + ckpt_filename)   
             else:
-                self.generate_and_plot(traj_np, maze_np[0], start[0], goal[0], label_B[0], 
-                                       groundtruth_traj[0], title='Groundtruth_maze_' + ckpt_filename)
-                self.generate_and_plot(traj_np, traj_np, start[0], goal[0], label_B[0], 
-                                       groundtruth_traj[0], title='Generated_maze_' + ckpt_filename)
+                self.generate_and_plot(traj_np, maze_np, start, goal, label_B, 
+                                       groundtruth_traj, title='Groundtruth_maze_' + ckpt_filename)
+                self.generate_and_plot(traj_np, traj_np, start, goal, label_B, 
+                                       groundtruth_traj, title='Generated_maze_' + ckpt_filename)
 
 
     def train(self, epochs=100, resume_path=None):
@@ -348,6 +387,11 @@ class MazeVQVAEVARTrainer(nn.Module):
                     "lr": current_lr
                 })
                 
+            if epoch % 1000 == 0:
+                for _ in range(5):
+                    # Run test-time inference and plot
+                    self.test_inference(num_samples=1, ckpt_filename=f"epoch_{epoch:05d}.pt")
+                
         if epoch:
             # save last checkpoint
             self.save_checkpoint(epoch)
@@ -363,8 +407,6 @@ def get_latest_checkpoint(ckpt_dir):
 
 if __name__ == "__main__":
     
-
-        
     # Create a dict for config and save to disk
     cfg = load_config("src/smart/minigrid/config.yaml")
     name = cfg.model.name
@@ -402,7 +444,7 @@ if __name__ == "__main__":
     # %%
     # ckpt_dir="./output_minigrid/01_regression/"
     os.environ["WANDB_DISABLED"] = "true"
-    cfg.model.batch_size = 1
+    # cfg.model.batch_size = 1
     trainer = MazeVQVAEVARTrainer(**cfg.model.to_dict(),
         # ckpt_dir=ckpt_dir,  # batch_size=1
         )

@@ -92,8 +92,8 @@ def plot_maze_traj(maze, traj, start, goal):
     try:
         import matplotlib.pyplot as plt
     except ImportError:
-        raise ImportError("matplotlib is required for plotting. Please install it.")
-    return
+        print("matplotlib is required for plotting. Please install it.")
+        return
     
     plt.imshow(maze.T, origin='lower', cmap='gray_r')
     plt.plot(traj[:, 0], traj[:, 1], marker='o', color='blue')
