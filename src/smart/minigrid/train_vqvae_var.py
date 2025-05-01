@@ -55,15 +55,18 @@ class MazeVQVAEVARTrainer(nn.Module):
                  lr= 8e-5,
                  scheduler_step=1000,
                  vae_encoder_in_ch=1,
+                 label_mode='start_goal', # start_goal or goal
                  ):
         super(MazeVQVAEVARTrainer, self).__init__()
                 
         self.vqvae_ch = vqvae_ch # vae encoder intermediate channels, grows by coder_ch_mult
         self.v_patch_nums = v_patch_nums
         self.target_traj = target_traj
+        self.label_mode = label_mode
         # make n_points_per_level into [(i, per_point_dim) for i in n_points_per_level]
         self.vae_encoder_in_ch = vae_encoder_in_ch
-        if self.target_traj == 'traj' or self.target_traj == 'map2traj':
+        print('vae_encoder_in_ch:', vae_encoder_in_ch)
+        if self.target_traj in ['traj', 'map2traj', 'trajPast2trajFuture', 'trajPastWithMap2traj', 'trajPastWithMap2trajFuture']:
             self.n_points_per_level = [(i, per_point_dim) for i in v_patch_nums]
         elif self.target_traj == 'map':
             self.n_points_per_level = [(i, i) for i in v_patch_nums]
@@ -180,10 +183,14 @@ class MazeVQVAEVARTrainer(nn.Module):
         
     def get_label(self, maze, start, goal):
         grid_H, grid_W = maze.shape[-2:]      # Height and width of the maze grid
-        if self.target_traj == 'traj' or self.target_traj == 'map2traj':
+        # if self.target_traj == 'traj' or self.target_traj == 'map2traj':
+        if self.label_mode == 'start_goal':
             label_B = (start[:, 0] * grid_W + start[:, 1]) * (grid_H * grid_W) + (goal[:, 0] * grid_W + goal[:, 1])
-        elif self.target_traj == 'map':
+            # print('label B, start and goal')
+        # elif self.target_traj == 'map':
+        elif self.label_mode == 'goal':
             label_B = (goal[:, 0] * grid_W + goal[:, 1])
+            # print('label_B', f"{label_B}={goal[:, 0]} * {grid_W} + {goal[:, 1]}")
         else:
             raise ValueError("target_traj must be 'traj' or 'map'")
         return label_B
@@ -197,11 +204,12 @@ class MazeVQVAEVARTrainer(nn.Module):
             # free_mask = (maze == 0)
             # N = free_mask.sum().item()
             # max_vocab_size = N * N
+            assert 2 in maze, maze
             grid_H, grid_W = maze.shape[-2:]
-            # max_vocab_size = grid_H * grid_W * grid_H * grid_W
+            max_vocab_size = grid_H * grid_W * grid_H * grid_W
             # print(f"Max vocab size needed for unique (start, goal): {max_vocab_size}")
             max_vocab_size = grid_H * grid_W
-            print(f"Max vocab size needed for unique (goal): {max_vocab_size}")
+            # print(f"Max vocab size needed for unique (goal): {max_vocab_size}")
             
             maze_img = batch["maze"].unsqueeze(1).float().to(self.device)  # [B, 1, H, W]
                       
@@ -213,36 +221,83 @@ class MazeVQVAEVARTrainer(nn.Module):
             
             
             if self.target_traj == 'traj':
-                f_BCt2_in = traj_BCT2
-                f_BCt2 = traj_BCT2
+                vae_in_BCt2 = traj_BCT2
+                vae_gt_BCt2 = traj_BCT2
+                var_gt_BCt2 = traj_BCT2
+                var_in_BCt2 = traj_BCT2
             elif self.target_traj == 'map':
-                f_BCt2_in = maze_img
-                f_BCt2 = maze_img
+                vae_in_BCt2 = maze_img
+                vae_gt_BCt2 = maze_img
+                var_gt_BCt2 = maze_img
+                var_in_BCt2 = maze_img
             elif self.target_traj == 'map2traj':
-                f_BCt2_in = self.encoder(maze_img) # [B, Cvae, 8, 8]
-                f_BCt2_in = f_BCt2_in.reshape(f_BCt2_in.shape[0], -1)  # [B, Cvae*8*8]
-                f_BCt2_in = self.token_predict_head(f_BCt2_in)  # [B, Cvae=1*T*2]
-                f_BCt2_in = f_BCt2_in.reshape(f_BCt2_in.shape[0], 1, -1, 2)  # [B, Cvae=1, T, 2]
-                f_BCt2 = traj_BCT2
-                # print('map2traj f_BCt2:', f_BCt2.shape)
+                print(self.target_traj, 'map2traj')
+                vae_in_BCt2 = self.encoder(maze_img) # [B, Cvae, 8, 8]
+                vae_in_BCt2 = vae_in_BCt2.reshape(vae_in_BCt2.shape[0], -1)  # [B, Cvae*8*8]
+                vae_in_BCt2 = self.token_predict_head(vae_in_BCt2)  # [B, Cvae=1*T*2]
+                vae_in_BCt2 = vae_in_BCt2.reshape(vae_in_BCt2.shape[0], 1, -1, 2)  # [B, Cvae=1, T, 2]
+                vae_gt_BCt2 = traj_BCT2
+                var_gt_BCt2 = traj_BCT2
+                var_in_BCt2 = traj_BCT2
+                # print('map2traj vae_gt_BCt2:', vae_gt_BCt2.shape)
+            elif self.target_traj == 'trajPast2trajFuture':
+                t_split = int(1/3. * traj_BCT2.shape[2]) #
+                past_traj_BCt2 = traj_BCT2.clone()
+                past_traj_BCt2[:, :, t_split:, :] = 0  # Zero out timesteps after the 1/3 split
+                vae_in_BCt2 = traj_BCT2
+                vae_gt_BCt2 = traj_BCT2
+                var_gt_BCt2 = traj_BCT2     # Full traj including past and future
+                var_in_BCt2 =  past_traj_BCt2
+                # print('var_in_BCt2', var_in_BCt2[0])
+            elif self.target_traj == 'trajPastWithMap2trajFuture':
+                t_split = int(1/3. * traj_BCT2.shape[2]) #
+                past_traj_BCt2 = traj_BCT2.clone()
+                past_traj_BCt2[:, :, t_split:, :] = 0  # Zero out timesteps after the 1/3 split
+                
+                # vae_in_BCt2 = traj_BCT2
+                map_BCHW = maze_img  # Map image [B, 1, H, W]
+                
+                # Flatten the map to match trajectory dimensions
+                # map_flat_BC1HW = map_BCHW.view(map_BCHW.shape[0], -1, 1, map_BCHW.shape[-1])  # [B, C=1, 1, HW]
+                # map_flat_BC1HW = map_flat_BC1HW.repeat(1, 1, past_traj_BCt2.shape[2], 1)  # Match T dimension [B, C, T, HW]
+                
+                map_flat_BC1HW = self.encoder(maze_img) # [B, Cvae, 8, 8]
+                map_flat_BC1HW = map_flat_BC1HW.reshape(map_flat_BC1HW.shape[0], -1)  # [B, Cvae*8*8]
+                map_flat_BC1HW = self.token_predict_head(map_flat_BC1HW)  # [B, Cvae=1*T*2]
+                map_flat_BC1HW = map_flat_BC1HW.reshape(map_flat_BC1HW.shape[0], 1, -1, 2)  # [B, Cvae=1, T, 2]
+                
+                # print('traj_BCT2', traj_BCT2.shape, 'map_flat_BC1HW', map_flat_BC1HW.shape)
+                
+                # Concatenate past trajectory and map along the channel dimension
+                # vae_in_BCt2 = torch.cat((traj_BCT2, map_flat_BC1HW), dim=1)  # [B, Cvae+map_channels, T, 2]
+                vae_in_BCt2 = traj_BCT2 + map_flat_BC1HW
+                # print('vae_in_BCt2', vae_in_BCt2.shape)
+                vae_gt_BCt2 = traj_BCT2     # Full traj including past and future
+                
+                var_gt_BCt2 = traj_BCT2     # Full traj including past and future
+                var_in_BCt2 = past_traj_BCt2 + map_flat_BC1HW # Just past trajectory for VAR input
+                
+
             else:
                 raise ValueError("target_traj must be 'traj' or 'map'")
 
             # VQVAE forward
-            result = self.vae(f_BCt2_in)
+            result = self.vae(vae_in_BCt2) 
             recon = result["f_BCt2_reconstructed"]  # [B, C, T, 2]
 
-            mse_loss = F.mse_loss(recon, f_BCt2, reduction="mean")
+            mse_loss = F.mse_loss(recon, vae_gt_BCt2, reduction="mean")
             vq_loss = result["loss_commitment_dictionary"]
 
             # VAR forward
             gt_idx_Bl: List[torch.LongTensor] = self.vae.img_to_idxBl(
-                f_BCt2, v_patch_nums=self.var_wo_ddp.patch_nums) # List[B, L=patch_h*patch_w] codebook indices, List len=R multi-scale tokens=len(v_patch_nums)
-            print('gt_idx_Bl: size', len(gt_idx_Bl), 'patch', gt_idx_Bl[0].shape)
+                var_gt_BCt2, v_patch_nums=self.var_wo_ddp.patch_nums) # List[B, L=patch_h*patch_w] codebook indices, List len=R multi-scale tokens=len(v_patch_nums)
+            # print('gt_idx_Bl: size', len(gt_idx_Bl), 'patch', gt_idx_Bl[0].shape, gt_idx_Bl[-1].shape) # gt_idx_Bl: size 7 patch torch.Size([4, 2]) torch.Size([4, 36=2*18])
             gt_BL: torch.Tensor = torch.cat(gt_idx_Bl, dim=1)  # (B, L=sum(patch_h*patch_w)), ground truth quantized indices for the input image batch.
             # gt_idx_Bl: size 7 patch torch.Size([4, 2])
             # gt_BL:  torch.Size([4, 108]) sum([2, 4, 6, 10, 18, 32, 36]) = 108
-            x_BLCv_wo_first_l: torch.Tensor = self.vae.quantize.idxBl_to_var_input(gt_idx_Bl) # (B, L, Cv), quantized indices to var input
+            in_idx_Bl: List[torch.LongTensor] = self.vae.img_to_idxBl(
+                var_in_BCt2, v_patch_nums=self.var_wo_ddp.patch_nums)
+            x_BLCv_wo_first_l: torch.Tensor = self.vae.quantize.idxBl_to_var_input(in_idx_Bl) # (B, L, Cv), quantized indices to var input
             
             prog_si=-1
             prog_wp_it=20
@@ -263,7 +318,7 @@ class MazeVQVAEVARTrainer(nn.Module):
                 self.var_wo_ddp.forward # 2. Train transformer to predict tokens
                 logits_BLV = self.var_wo_ddp(label_B, x_BLCv_wo_first_l) # (B, L, V), logits for the input image batch, logits_BLV:  torch.Size([4, 108, V=4096=vocab_size])
                 assert not torch.isnan(logits_BLV).any(), logits_BLV
-                print('logits_BLV: ', logits_BLV.shape, 'gt_BL: ', gt_BL.shape) # logits_BLV:  torch.Size([4, 108, 4096]) gt_BL:  torch.Size([4, 108])
+                # print('logits_BLV: ', logits_BLV.shape, 'gt_BL: ', gt_BL.shape) # logits_BLV:  torch.Size([4, 108, 4096]) gt_BL:  torch.Size([4, 108])
                 loss = self.train_loss((logits_BLV).view(-1, V), gt_BL.view(-1)).view(B, -1) # (B, L). logits shape is (B, L, V), gt shape is (B, L)
                 if prog_si >= 0:    # in progressive training - start with coarse scales
                     bg, ed = self.vae.begin_ends[prog_si]
@@ -279,7 +334,7 @@ class MazeVQVAEVARTrainer(nn.Module):
             total_loss.backward()
             self.optimizer.step()
 
-            print(f"Loss: {total_loss.item():.4f} | VQ: {vq_loss.item():.4f} | VAR: {var_loss.item():.4f}")
+            # print(f"Loss: {total_loss.item():.4f} | VQ: {vq_loss.item():.4f} | VAR: {var_loss.item():.4f}")
             
             return total_loss, vq_loss, var_loss
 
@@ -309,7 +364,7 @@ class MazeVQVAEVARTrainer(nn.Module):
             return
         plt.figure()
         plt.imshow(maze_np.T, origin='lower', cmap='gray_r')
-        if self.target_traj == 'traj' or self.target_traj == 'map2traj':
+        if 'traj' in self.target_traj:
             plt.plot(traj_np[:, 0], traj_np[:, 1], marker='o', color='blue', label='Generated')
         plt.plot(groundtruth_traj[:, 0], groundtruth_traj[:, 1], marker='o', color='red', label='Ground Truth')
         if start is not None:
@@ -319,7 +374,7 @@ class MazeVQVAEVARTrainer(nn.Module):
         plt.legend()
         plt.title(title)
         plt.grid(True)
-        path = os.path.join(self.ckpt_dir, f"generated_label_{label_B}_{title}.png")
+        path = os.path.join(self.ckpt_dir, f"label_{label_B}_{title}.png")
         plt.savefig(path)
         print("Saved generated trajectory plot to", path)
         plt.close()
@@ -351,15 +406,14 @@ class MazeVQVAEVARTrainer(nn.Module):
                 print(traj_np.shape)
                 maze_np = maze.cpu().numpy() if torch.is_tensor(maze) else maze
             
-            if self.target_traj == 'traj' or self.target_traj == 'map2traj':
-                self.generate_and_plot(traj_np, maze_np, start, goal, label_B, 
-                                       groundtruth_traj, title='VAR Generated Trajectory_' + ckpt_filename)   
-            else:
+            if self.target_traj == 'map':
                 self.generate_and_plot(traj_np, maze_np, start, goal, label_B, 
                                        groundtruth_traj, title='Groundtruth_maze_' + ckpt_filename)
                 self.generate_and_plot(traj_np, traj_np, start, goal, label_B, 
                                        groundtruth_traj, title='Generated_maze_' + ckpt_filename)
-
+            else:
+                self.generate_and_plot(traj_np, maze_np, start, goal, label_B, 
+                                       groundtruth_traj, title='VAR Generated Trajectory_' + ckpt_filename)  
 
     def train(self, epochs=100, resume_path=None):
         start_epoch = 0
@@ -369,15 +423,16 @@ class MazeVQVAEVARTrainer(nn.Module):
 
         epoch = None
         for epoch in range(start_epoch, epochs):
-            print(f"=== Epoch {epoch + 1} ===")
             total_loss, vq_loss, var_loss = self.train_epoch()
-            if epoch % 250 == 0:
+            if epoch % 500 == 0:
                 self.save_checkpoint(epoch)
             
             self.scheduler.step()
             current_lr = self.optimizer.param_groups[0]['lr']
             current_lr = self.scheduler.get_last_lr()[0]
-            print(f"Current LR: {current_lr}")
+            
+            if epoch % 50 == 0:
+                print(f"Epoch {epoch + 1} | Loss: {total_loss.item():.4f} | VQ: {vq_loss.item():.4f} | VAR: {var_loss.item():.4f} | Current LR: {current_lr} | Mode: {self.target_traj}")
             
             if wandb.run is not None:
                 wandb.log({
@@ -436,14 +491,14 @@ if __name__ == "__main__":
     print('Running name', name)
     
     # %%
-    os.environ["WANDB_DISABLED"] = "false"
+    # os.environ["WANDB_DISABLED"] = "false"
     trainer = MazeVQVAEVARTrainer(**cfg.model.to_dict())
     trainer.train(**cfg.trainer.to_dict())
     
     
     # %%
     # ckpt_dir="./output_minigrid/01_regression/"
-    os.environ["WANDB_DISABLED"] = "true"
+    # os.environ["WANDB_DISABLED"] = "true"
     # cfg.model.batch_size = 1
     trainer = MazeVQVAEVARTrainer(**cfg.model.to_dict(),
         # ckpt_dir=ckpt_dir,  # batch_size=1

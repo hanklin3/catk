@@ -22,7 +22,7 @@ source activate var_catk
 
 export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
 # alias torchrun='/home/gridsan/thlin/.conda/envs/catk/bin/torchrun'
-export PATH=/state/partition1/llgrid/pkg/anaconda/python-ML-2024b/bin:$PATH
+export PATH=/state/partition1/llgrid/pkg/anaconda/python-ML-2024b/bin:$PATH/
 
 # /home/gridsan/thlin/.conda/envs/catk/bin/torchrun \
 

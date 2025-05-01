@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -n 8 --gres=gpu:volta:1 -o output/next_scale_autoreg-00012_VAR_ang_acc10x_bfloat16_finetune_vqvae.log-%j
+#SBATCH -n 8 --gres=gpu:volta:1 -o output/next_scale_autoreg-00015_VAR_allGrad_ang_acc100x_bfloat16_NofinetuneVqvae.log-%j
 
 
 export LOGLEVEL=INFO
@@ -71,6 +71,9 @@ MY_TASK_NAME=$MY_EXPERIMENT"-0009b_VAR_bfloat16_finetune_vqvae_LR1e-5"
 MY_TASK_NAME=$MY_EXPERIMENT"-00010_VAR_ang_acc_bfloat16_finetune_vqvae"
 MY_TASK_NAME=$MY_EXPERIMENT"-00011b_VAR_ang_acc100x_bfloat16_finetune_vqvae"
 MY_TASK_NAME=$MY_EXPERIMENT"-00012_VAR_ang_acc10x_bfloat16_finetune_vqvae"
+MY_TASK_NAME=$MY_EXPERIMENT"-00013_VAR_ang_acc100x_bfloat16_NofinetuneVqvae"
+# MY_TASK_NAME=$MY_EXPERIMENT"-00014_VAR_ang_acc100x_32bit_NofinetuneVqvae"
+MY_TASK_NAME=$MY_EXPERIMENT"-00015_VAR_allGrad_ang_acc100x_bfloat16_NofinetuneVqvae"
 # MY_TASK_NAME=$MY_EXPERIMENT"-testing"
 
 torchrun \

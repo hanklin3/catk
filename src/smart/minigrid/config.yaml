@@ -7,22 +7,49 @@ model:
   # name: 09_traj_repeat
   # name: 000_traj_test
   # name: 010_map2traj
-  name: 011_map2traj
+  # name: 011_map2traj
+  # name: 011-4_map2traj
+  # name: 012_traj_classes4096
+  # name: 013_traj_classes4096_labelGoalOnly
+  # name: 012-2_traj_classes4096
+  # name: 012-4_traj_classes4096
+  # name: 015_traj_classes4096_trajPast2trajFuture_vaeFull_varPast2Full
+  # name: 015-2_traj_classes4096_trajPast2trajFuture_vaeFull_varPast2Full
+  # target_traj: trajPast2trajFuture
+  # vae_encoder_in_ch: 1
+
+  # name: 016-2_trajPastWithMap2trajFuture
+  name: 016_trajPastWithMap2trajFuture
+  target_traj: trajPastWithMap2trajFuture
+  vae_encoder_in_ch: 1
+
+  # n_token_agent: 11664
+  n_token_agent: 4096
+
+  # name: 012_map2traj_goal_only
+  # n_token_agent: 64
+
   traj_per_epoch: 10000
   n_vq_emb: 32
   vqvae_ch: 160
   vq_vocab_size: 4096
   # n_token_agent: 108 # 11664,
-  n_token_agent: 11664
+  
   # v_patch_nums: [1, 2, 3, 5, 8]
   v_patch_nums: [1, 2, 3, 5, 9, 16, 18]
   #n_points_per_level: [(1, 2), (2, 2), (3, 2), (5, 2), (8, 2)],
   var_precision: bfloat16
-  target_traj: traj
+  
+  
+  label_mode: start_goal
+  # label_mode: goal  # won't work from start
+  # target_traj: traj
   # target_traj: map
   # target_traj: map2traj
+
   scheduler_step: 4000
+  # scheduler_step: 10000
 
 trainer:
-  epochs: 6500
+  epochs: 12000
   resume_path: null

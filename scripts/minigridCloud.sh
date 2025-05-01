@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -n 8 --gres=gpu:volta:1 -o output/minigrid-08_traj_repeat.log-%j
+#SBATCH -n 8 --gres=gpu:volta:1 -o output/minigrid-016-2_trajPastWithMap2trajFuture.log-%j
 
 
 export LOGLEVEL=INFO

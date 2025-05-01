@@ -321,15 +321,19 @@ class VectorQuantizer2(nn.Module):
             if self.prog_si == 0 or (0 <= self.prog_si-1 < si): break   # progressive training: not supported yet, prog_si always -1
             # h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, pn_next), size=(H, W), mode='bicubic')
             # h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_next, W), size=(H, W), mode='bicubic')
+            
             h_BChw = F.interpolate(self.embedding(gt_ms_idx_Bl[si]).transpose_(1, 2).view(B, C, pn_nextH, pn_nextW), size=(H, W), mode='bicubic')
             
             # same as this block         
             # h_BCt2: idx_Bhw(B, h, w) -> embedding -> (B,pn,2,n_emb) --> permute (B, n_emb, pn, 2) --> interpolate to HW (B, C, H=18, W=2)
             # print('gt_ms_idx_Bl[si]', gt_ms_idx_Bl[si].shape)
-            # idx_Bhw = gt_ms_idx_Bl[si].view(B, pn_next, W) # (B*h*w) -> (B, h, w)
+            # print('pn_nextH, pn_nextW', pn_nextH, pn_nextW)
+            
+            # idx_Bhw = gt_ms_idx_Bl[si].view(B, pn_nextH, pn_nextW) # (B*h*w) -> (B, h, w)
             # h_BCt2 = F.interpolate(self.embedding(idx_Bhw).permute(0, 3, 1, 2), size=(H, W), mode='bicubic').contiguous() if (si != SN-1) else \
             #     self.embedding(idx_Bhw).permute(0, 3, 1, 2).contiguous()
             # h_BChw = h_BCt2
+            
             # h_BCt2 = self.quant_resi[si/(SN-1)](h_BCt2)  # A refinement step is applied to the quantized embeddings h_BCt2 for the current scale.
             # [B, n_emb, 18, 2]  # Hierarchical refinement: weights are shared across scales, weight-sum of raw quantized embeddings and the refinement.
         
