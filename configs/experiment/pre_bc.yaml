@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  # - override /trainer: ddp
-  - override /model: smart
+  - override /trainer: ddp
+  # - override /model: smart
 
 model:
   model_config:
@@ -15,10 +15,14 @@ model:
       agent_token_sampling: # closed-loop
         num_k: 1 # for k nearest neighbors
         temp: 1.0
+    # gradient_clip_val: 0.5
+    gradient_clip_algorithm: "norm" # "value" or "norm"
+    # overflow_new_scale: 32768.0 # fp16 overflows >65536.0
+    overflow_new_scale: 65536.0 # for bfloat16, which has same range as fp32
 
     training_rollout_sampling:
       criterium: next_scale # {topk_dist_sampled_with_prob, topk_prob, topk_prob_sampled_with_dist}
-      num_k: 1 # for k nearest neighbors, set to -1 to turn-off closed-loop training
+      num_k: -1 # for k nearest neighbors, set to -1 to turn-off closed-loop training
       temp: 1e-5 # catk = topk_prob_sampled_with_dist with temp=1e-5
       n_points_per_level: [1, 2, 3, 5, 9, 16, 18]
       using_znorm_cos_sim_ow_L2: false
@@ -29,20 +33,21 @@ model:
       n_vq_emb: 32  # vqvae quantized vector emb size
       vq_vocab_size: 4096 # vqvae quantized vector latent vocab size
       var_precision: "bfloat16" # float16 or bfloat16 or null (32 bit)
-      finetune_vqvae: true # if build_var is true, finetune_vqvae. (SMART before vae is still frozen).
+      finetune_vqvae: false # if build_var is true, finetune_vqvae. (SMART before vae is still frozen).
 
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-18_19-17-33/checkpoints/epoch_009.ckpt #null
 # ckpt_path: CKPT_FOR_RESUME.ckpt # to resume training
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-19_10-04-48/checkpoints/last.ckpt
+ckpt_path: logs/pre_bc-debug/runs/2025-05-03_04-39-44/checkpoints/epoch_049.ckpt
 
 trainer:
-  limit_train_batches: 1.0
-  limit_val_batches: 0.1
-  check_val_every_n_epoch: 1
+  limit_train_batches: 4.0
+  limit_val_batches: 4.0
+  check_val_every_n_epoch: 10
   max_epochs: 64
 
 data:
-  train_batch_size: 2 #10
+  train_batch_size: 6 #10
   val_batch_size: 4 #10
   test_batch_size: 4 #10
   num_workers: 10

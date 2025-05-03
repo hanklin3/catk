@@ -49,9 +49,13 @@ export MASTER_ADDR=127.0.0.1
 # echo $PORT
 # export MASTER_PORT=$PORT
 
-torchrun \
+NUM_NODES=1
+
+CUDA_VISIBLE_DEVICES=3 torchrun \
   -m \
   --master-port $MASTER_PORT \
+  --nnodes $NUM_NODES \
+  --nproc_per_node 1 \
   src.run \
   experiment=$MY_EXPERIMENT \
   task_name=$MY_TASK_NAME \

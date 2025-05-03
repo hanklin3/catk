@@ -62,3 +62,7 @@ model_config:
     label_smoothing: 0.1
     rollout_as_gt: false
   finetune: false
+  # gradient_clip_val: 0.5
+  # gradient_clip_algorithm: "norm" # "value" or "norm"
+  # # overflow_new_scale: 32768.0 # fp16 overflows >65536.0
+  # overflow_new_scale: 65536.0 # for bfloat16, which has same range as fp32

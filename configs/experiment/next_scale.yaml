@@ -36,12 +36,12 @@ model:
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-19_10-04-48/checkpoints/last.ckpt
 # ckpt_path: logs/next_scale-vqvae_loss_vqvae_logits_gradFix/runs/2025-01-20_23-31-42/checkpoints/epoch_008.ckpt
 # ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_11-30-16/checkpoints/last.ckpt
-ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_15-33-32/checkpoints/epoch_005.ckpt
+# ckpt_path: logs/next_scale-0004_vqvae_varClass_rectangle_Cvae32/runs/2025-02-05_15-33-32/checkpoints/epoch_005.ckpt
 
 trainer:
   limit_train_batches: 1.0
-  limit_val_batches: 0.1
-  check_val_every_n_epoch: 1
+  limit_val_batches: 1.0
+  check_val_every_n_epoch: 10
   max_epochs: 64
 
 data:

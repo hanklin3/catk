@@ -99,7 +99,7 @@ class VARTrainer(object):
         prog_wp = max(min(self.prog_it / prog_wp_it, 1), 0.01)
         if self.first_prog: prog_wp = 1    # no prog warmup at first prog stage, as it's already solved in wp
         if prog_si == len(self.patch_nums) - 1: prog_si = -1    # max prog, as if no prog
-        
+
         # forward
         #Train step 2: VAR Training (after VQVAE is trained):
         # VQVAE is frozen

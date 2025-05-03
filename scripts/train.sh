@@ -44,7 +44,7 @@ MY_EXPERIMENT="pre_bc"
 # MY_EXPERIMENT="clsft"
 MY_TASK_NAME=$MY_EXPERIMENT"-vqvae"
 MY_TASK_NAME=$MY_EXPERIMENT"-vqvae_n_step16"
-MY_TASK_NAME=$MY_EXPERIMENT"-testing"
+MY_TASK_NAME=$MY_EXPERIMENT"-debug"
 
 export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
 # alias torchrun='/home/gridsan/thlin/.conda/envs/catk/bin/torchrun'
@@ -53,12 +53,18 @@ export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in c
 
 echo "torchrun -m src.run experiment=$MY_EXPERIMENT task_name=$MY_TASK_NAME"
 
-torchrun \
+NUM_NODES=1
+
+CUDA_VISIBLE_DEVICES=2,3 torchrun \
   -m \
   --master-port $MASTER_PORT \
+  --nnodes $NUM_NODES \
+  --nproc_per_node 2 \
   src.run \
   experiment=$MY_EXPERIMENT \
-  task_name=$MY_TASK_NAME
+  task_name=$MY_TASK_NAME \
+  trainer=ddp
+
 
 # torchrun \
 # -m \
