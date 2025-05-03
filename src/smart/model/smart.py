@@ -75,13 +75,14 @@ class SMART(LightningModule):
         self.validation_rollout_sampling = model_config.validation_rollout_sampling\
         
         # Important: This property (False) activates manual optimization.
-        self.automatic_optimization = False
+        self.automatic_optimization = True
         
         # Gradient clipping and new scale for overflow
         self.scaler = torch.cuda.amp.GradScaler(init_scale=2. ** 11, growth_interval=1000)
-        self.gradient_clip_val = model_config.gradient_clip_val
-        self.gradient_clip_algorithm = model_config.gradient_clip_algorithm
-        self.overflow_new_scale = model_config.overflow_new_scale
+        if not self.automatic_optimization:
+            self.gradient_clip_val = model_config.gradient_clip_val
+            self.gradient_clip_algorithm = model_config.gradient_clip_algorithm
+            self.overflow_new_scale = model_config.overflow_new_scale
 
     def training_step(self, data, batch_idx):
         tokenized_map, tokenized_agent = self.token_processor(data)
@@ -112,52 +113,56 @@ class SMART(LightningModule):
                 tokenized_agent,
                 sampling_scheme=self.training_rollout_sampling,
             )
-
-        opt = self.optimizers()
-        # scheduler = self.lr_schedulers()
-        opt.zero_grad()
-
+            
         loss_dict = self.training_loss(
-            **pred,
-            token_agent_shape=tokenized_agent["token_agent_shape"],  # [n_agent, 2]
-            token_traj=tokenized_agent["token_traj"],  # [n_agent, n_token, 4, 2]
-            train_mask=data["agent"]["train_mask"],  # [n_agent]
-            current_epoch=self.current_epoch,
-        )
+                **pred,
+                token_agent_shape=tokenized_agent["token_agent_shape"],  # [n_agent, 2]
+                token_traj=tokenized_agent["token_traj"],  # [n_agent, n_token, 4, 2]
+                train_mask=data["agent"]["train_mask"],  # [n_agent]
+                current_epoch=self.current_epoch,
+            )
         loss = loss_dict["loss"]
 
-        # self.manual_backward(loss)
-        # opt.step()
-        
-        self.scaler.scale(loss).backward()
-        
-        # import pdb; pdb.set_trace()
-        
-        scaler_sc: float = self.scaler.get_scale()
-        overflow_found = False
-        if scaler_sc > self.overflow_new_scale: # fp16 will overflow when >65536, so multiply 32768 could be dangerous
-            print("OVERFLOW found: scaler scaler_sc > 32768, reducing scale to 32768")
-            overflow_found = True
-        #     self.scaler.update(new_scale=32768.)
-        
-        nan_grad_found = False
-        for name, param in self.encoder.named_parameters():
-            if param.grad is not None and torch.any(torch.isnan(param.grad)):
-                nan_grad_found = True
-                print(f"NaN gradient found in {name}")
-                break
-            
-        # early clip gradients
-        self.clip_gradients(opt, gradient_clip_val=self.gradient_clip_val, 
-                            gradient_clip_algorithm=self.gradient_clip_algorithm)
+        if not self.automatic_optimization:
+            opt = self.optimizers()
+            # scheduler = self.lr_schedulers()
+            opt.zero_grad()
 
-        if overflow_found or nan_grad_found:
-             # fp16 will overflow when >65536, so multiply 32768 could be dangerous
-            print("nan grad found, reducing scale")
-            self.scaler.update(new_scale=self.overflow_new_scale)
-        else:
-            self.scaler.step(opt)
-            self.scaler.update()
+            # early clip gradients
+        
+            self.clip_gradients(opt, gradient_clip_val=self.gradient_clip_val, 
+                                gradient_clip_algorithm=self.gradient_clip_algorithm)
+            
+            # self.manual_backward(loss)
+            # opt.step()
+            
+            self.scaler.scale(loss).backward()
+            
+            # import pdb; pdb.set_trace()
+            
+            scaler_sc: float = self.scaler.get_scale()
+            overflow_found = False
+            if scaler_sc > self.overflow_new_scale: # fp16 will overflow when >65536, so multiply 32768 could be dangerous
+                print("OVERFLOW found: scaler scaler_sc > 32768, reducing scale to 32768")
+                overflow_found = True
+            #     self.scaler.update(new_scale=32768.)
+            
+            nan_grad_found = False
+            for name, param in self.encoder.named_parameters():
+                if param.grad is not None and torch.any(torch.isnan(param.grad)):
+                    nan_grad_found = True
+                    print(f"NaN gradient found in {name}")
+                    break
+                
+
+
+            if overflow_found or nan_grad_found:
+                # fp16 will overflow when >65536, so multiply 32768 could be dangerous
+                print("nan grad found, reducing scale")
+                self.scaler.update(new_scale=self.overflow_new_scale)
+            else:
+                self.scaler.step(opt)
+                self.scaler.update()
             
         # scheduler.step()
 

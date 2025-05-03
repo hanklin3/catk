@@ -46,20 +46,20 @@ MY_TASK_NAME=$MY_EXPERIMENT"-vqvae"
 MY_TASK_NAME=$MY_EXPERIMENT"-vqvae_n_step16"
 MY_TASK_NAME=$MY_EXPERIMENT"-debug"
 
-export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
+# export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
 # alias torchrun='/home/gridsan/thlin/.conda/envs/catk/bin/torchrun'
 
 # /home/gridsan/thlin/.conda/envs/catk/bin/torchrun \
 
 echo "torchrun -m src.run experiment=$MY_EXPERIMENT task_name=$MY_TASK_NAME"
 
-NUM_NODES=1
+NUM_GPU=2
 
 CUDA_VISIBLE_DEVICES=2,3 torchrun \
   -m \
   --master-port $MASTER_PORT \
-  --nnodes $NUM_NODES \
-  --nproc_per_node 2 \
+  --nnodes 1 \
+  --nproc_per_node $NUM_GPU \
   src.run \
   experiment=$MY_EXPERIMENT \
   task_name=$MY_TASK_NAME \

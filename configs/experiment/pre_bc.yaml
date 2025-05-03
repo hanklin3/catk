@@ -38,12 +38,13 @@ model:
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-18_19-17-33/checkpoints/epoch_009.ckpt #null
 # ckpt_path: CKPT_FOR_RESUME.ckpt # to resume training
 # ckpt_path: logs/pre_bc-debug/runs/2024-12-19_10-04-48/checkpoints/last.ckpt
-ckpt_path: logs/pre_bc-debug/runs/2025-05-03_04-39-44/checkpoints/epoch_049.ckpt
+# ckpt_path: logs/pre_bc-debug/runs/2025-05-03_04-39-44/checkpoints/epoch_049.ckpt
+ckpt_path: null
 
 trainer:
-  limit_train_batches: 4.0
-  limit_val_batches: 4.0
-  check_val_every_n_epoch: 10
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  check_val_every_n_epoch: 8
   max_epochs: 64
 
 data:

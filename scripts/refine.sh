@@ -7,8 +7,6 @@ export HYDRA_FULL_ERROR=1
 export TF_CPP_MIN_LOG_LEVEL=2
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-
-
 # source ~/miniconda3/etc/profile.d/conda.sh
 # conda activate catk
 
@@ -19,10 +17,10 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # source activate catk
 
-source activate var_catk
-module load anaconda/Python-ML-2024b
+source activate catk
+# module load anaconda/Python-ML-2024b
 
-export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
+# export PATH=/home/gridsan/thlin/.conda/envs/catk/bin:$PATH   # use torchrun in conda bin
 # alias torchrun='/home/gridsan/thlin/.conda/envs/catk/bin/torchrun'
 
 # /home/gridsan/thlin/.conda/envs/catk/bin/torchrun \
@@ -50,9 +48,13 @@ export MASTER_ADDR=127.0.0.1
 # echo $PORT
 # export MASTER_PORT=$PORT
 
-torchrun \
+NUM_GPU=2
+
+CUDA_VISIBLE_DEVICES=2,3 torchrun \
   -m \
   --master-port $MASTER_PORT \
+  --nnodes 1 \
+  --nproc_per_node $NUM_GPU \
   src.run \
   experiment=$MY_EXPERIMENT \
   task_name=$MY_TASK_NAME \
